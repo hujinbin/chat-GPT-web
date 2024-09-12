@@ -1,3 +1,5 @@
+import withAntdLess from 'next-plugin-antd-less';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     exportPathMap: async function (defaultPathMap) {
@@ -7,4 +9,4 @@ const nextConfig = {
     }
 };
 
-export default nextConfig;
+export default withAntdLess(nextConfig);

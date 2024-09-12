@@ -5,6 +5,7 @@ import { Input } from 'antd';
 import { useState } from 'react';
 import { chatCompletion } from '@/api/index';
 import { RightSquareTwoTone } from '@ant-design/icons';
+import style from './index.module.scss';
 
 const Home = () => {
   const [chatList, setChatList] = useState([]);
