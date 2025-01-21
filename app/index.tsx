@@ -2,7 +2,7 @@
 import React, { useMemo, useEffect } from 'react';
 import { Layout } from 'antd';
 import { useRouter } from 'next/router';
-import Sider from '../components/Sider.tsx';
+import Sider from '../components/Sider/index.jsx';
 import Permission from '../components/Permission';
 import HeaderComponent from '../components/HeaderComponent'; // 假设 HeaderComponent 是一个 React 组件
 import useBasicLayout from '@/hooks/useBasicLayout';
@@ -13,8 +13,6 @@ const ChatLayout = () => {
   const router = useRouter();
 
   const { isMobile } = useBasicLayout();
-
-
  
   const getMobileClass = useMemo(() => {
     if (isMobile) return 'rounded-none shadow-none';
