@@ -1,39 +1,57 @@
 'use client';
-import React, { useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Layout } from 'antd';
-import { useRouter } from 'next/router';
-import Sider from '../components/Sider/index.jsx';
-import Permission from '../components/Permission';
-import HeaderComponent from '../components/HeaderComponent'; // 假设 HeaderComponent 是一个 React 组件
-import useBasicLayout from '@/hooks/useBasicLayout';
+import Sider from '../components/Sider/index';
+import ChatPage from './page';
 
 const { Content } = Layout;
 
 const ChatLayout = () => {
-  const router = useRouter();
+  // 模拟响应式检测
+  const [isMobile, setIsMobile] = useState(false);
+  
+  // 监听窗口大小变化
+  React.useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-  const { isMobile } = useBasicLayout();
- 
-  const getMobileClass = useMemo(() => {
-    if (isMobile) return 'rounded-none shadow-none';
-    return 'border rounded-md shadow-md dark:border-neutral-800';
-  }, [isMobile]);
+  const [currentChatId, setCurrentChatId] = useState<string>('');
+  const [chats, setChats] = useState<Array<{ id: string; title: string; time: string; isStarred: boolean }>>([]);
+
+  // 创建新聊天
+  const createNewChat = () => {
+    const newChat = {
+      id: Date.now().toString(),
+      title: '新聊天',
+      time: '刚刚',
+      isStarred: false,
+    };
+    setChats(prev => [newChat, ...prev]);
+    setCurrentChatId(newChat.id);
+  };
+
   return (
-    <div className={`h-full dark:bg-[#24272e] transition-all ${isMobile ? 'p-0' : 'p-4'}`}>
-      <div className={`h-full overflow-hidden ${getMobileClass}`}>
-        <Layout className={`z-40 transition ${getContainerClass}`} hasSider>
-          <Sider />
-          <Content className="h-full">
-            <HeaderComponent />
-            {/* 使用Next.js的Link组件进行导航 */}
-            <Switch>
-              <Route path="/chat/:uuid" component={ChatComponent} />
-              {/* 其他路由 */}
-            </Switch>
-          </Content>
-        </Layout>
-      </div>
-    </div>
+    <Layout className="h-screen bg-gray-50 dark:bg-gray-900">
+      <Sider 
+        currentChatId={currentChatId}
+        chats={chats}
+        onChatSelect={setCurrentChatId}
+        onNewChat={createNewChat}
+        onChatsUpdate={setChats}
+      />
+      <Layout className="h-full">
+        <Content className="h-full p-0 overflow-hidden">
+          <ChatPage isMobile={isMobile} currentChatId={currentChatId} onNewChat={createNewChat} />
+        </Content>
+      </Layout>
+    </Layout>
   );
 };
 

@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 
-const host: string = "https://ai.leheavengame.com";
+// const host: string = "https://ai.leheavengame.com";
+const host: string = "http://localhost:8080";
 console.log(host)
 
 const service: AxiosInstance = axios.create({

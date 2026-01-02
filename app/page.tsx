@@ -1,110 +1,279 @@
 'use client';
-// 引入 React 及相关钩子
-import React, { useEffect, useRef } from 'react';
-// 引入 Ant Design 组件
-import { Space, Spin } from 'antd';
-
-// 引入自定义组件，用于后续替换
+import React, { useState, useEffect, useRef } from 'react';
+import { Input, Button, Space, Spin, Avatar, Divider } from 'antd';
+import { SendOutlined, LoadingOutlined, CloseOutlined } from '@ant-design/icons';
 import HeaderComponent from '../components/HeaderComponent';
-import MessageComponent from '../components/MessageComponent';
+import { chatCompletion } from '../api/index';
 
-// 假设 loading 和 isMobile 为状态，这里简单模拟
-const loading = false;
-const isMobile = false;
+const { TextArea } = Input;
 
-// 模拟数据，对应 Vue 中的 dataSources
-const dataSources = [
-  {
-    dateTime: '2025-01-21',
-    text: '这是一条消息',
-    inversion: false,
-    error: false,
-    loading: false,
-  },
-  // 可以添加更多数据
-];
+interface Message {
+  id: string;
+  text: string;
+  isUser: boolean;
+  dateTime: string;
+  error?: boolean;
+  loading?: boolean;
+}
 
-// 定义滚动到底部的函数
-const scrollToBottom = () => {
-  // 这里可以实现滚动逻辑，需要根据实际 DOM 结构调整
-  console.log('滚动到底部');
-};
+interface ChatPageProps {
+  isMobile: boolean;
+  currentChatId: string;
+  onNewChat: () => void;
+}
 
-// 模拟 controller.abort() 方法
-const controller = {
-  abort: () => {
-    console.log('请求已中止');
-  },
-};
+interface ChatSession {
+  chatId: string;
+  messages: Message[];
+}
 
-const ChatPage = () => {
-  // 创建 inputRef 引用
-  const inputRef = useRef(null);
-  // 创建 scrollRef 引用
-  const scrollRef = useRef(null);
+const ChatPage = ({ isMobile, currentChatId, onNewChat }: ChatPageProps) => {
+  // 管理多个聊天会话
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  
+  const [inputValue, setInputValue] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [usingContext, setUsingContext] = useState(true);
 
-  // 模拟 Vue 的 onMounted 钩子
-  useEffect(() => {
-    scrollToBottom();
-    if (inputRef.current && !isMobile) {
-      inputRef.current.focus();
-    }
-    // 模拟 Vue 的 onUnmounted 钩子，返回一个清理函数
-    return () => {
-      if (loading) {
-        controller.abort();
+  // 获取当前聊天会话的消息
+  const getCurrentMessages = (): Message[] => {
+    const currentSession = chatSessions.find(session => session.chatId === currentChatId);
+    return currentSession ? currentSession.messages : [];
+  };
+
+  // 保存当前聊天会话的消息
+  const saveCurrentMessages = (messages: Message[]) => {
+    setChatSessions(prevSessions => {
+      const sessionIndex = prevSessions.findIndex(session => session.chatId === currentChatId);
+      if (sessionIndex >= 0) {
+        // 更新现有会话
+        return prevSessions.map((session, index) => 
+          index === sessionIndex ? { ...session, messages } : session
+        );
+      } else {
+        // 创建新会话
+        return [...prevSessions, { chatId: currentChatId, messages }];
       }
+    });
+  };
+
+  // 当currentChatId变化时，初始化新聊天会话
+  useEffect(() => {
+    if (currentChatId && !chatSessions.find(session => session.chatId === currentChatId)) {
+      const initialMessages: Message[] = [
+        {
+          id: '1',
+          text: '你好！我是AI助手，有什么可以帮助你的吗？',
+          isUser: false,
+          dateTime: new Date().toISOString(),
+        },
+      ];
+      saveCurrentMessages(initialMessages);
+    }
+  }, [currentChatId]);
+  
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 滚动到底部
+  const scrollToBottom = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  };
+
+  // 发送消息
+  const sendMessage = async () => {
+    if (!inputValue.trim() || loading || !currentChatId) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      text: inputValue.trim(),
+      isUser: true,
+      dateTime: new Date().toISOString(),
     };
-  }, []);
+
+    // 获取当前消息列表并添加用户消息
+    const currentMessages = getCurrentMessages();
+    const updatedMessages = [...currentMessages, userMessage];
+    saveCurrentMessages(updatedMessages);
+    
+    setInputValue('');
+    setLoading(true);
+
+    try {
+      // 这里调用实际的API
+      const response = await chatCompletion({
+        message: inputValue,
+        usingContext,
+      });
+
+      const aiMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: response.data?.content || '抱歉，我无法理解您的问题。',
+        isUser: false,
+        dateTime: new Date().toISOString(),
+      };
+
+      // 更新消息列表，添加AI回复
+      saveCurrentMessages([...updatedMessages, aiMessage]);
+    } catch (error) {
+      console.error('发送消息失败:', error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        text: '抱歉，发送消息失败，请稍后重试。',
+        isUser: false,
+        dateTime: new Date().toISOString(),
+        error: true,
+      };
+
+      // 更新消息列表，添加错误信息
+      saveCurrentMessages([...updatedMessages, errorMessage]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 处理输入框变化
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInputValue(e.target.value);
+  };
+
+  // 处理按键事件
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  // 导出聊天记录
+  const handleExport = () => {
+    const exportContent = getCurrentMessages()
+      .map(msg => `${msg.isUser ? '我' : 'AI'}: ${msg.text}`)
+      .join('\n\n');
+    
+    const blob = new Blob([exportContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat_${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <div className="flex flex-col w-full h-full">
-      {/* 条件渲染 HeaderComponent */}
-      {isMobile && (
-        <HeaderComponent
-          usingContext={false} // 假设初始值为 false
-          onExport={() => console.log('导出')}
-          onToggleUsingContext={() => console.log('切换上下文')}
-        />
+    <div className="flex flex-col w-full h-full bg-gray-50 dark:bg-gray-900">
+      {/* 非移动端显示的头部 */}
+      {!isMobile && (
+        <div className="border-b bg-white dark:bg-gray-800 px-4 py-3 flex justify-between items-center">
+          <div className="text-lg font-semibold text-gray-900 dark:text-white">AI 聊天助手</div>
+          <HeaderComponent
+            usingContext={usingContext}
+            onExport={handleExport}
+            onToggleUsingContext={() => setUsingContext(!usingContext)}
+            onNewChat={onNewChat}
+          />
+        </div>
       )}
+      
       {/* 主内容区域 */}
       <main className="flex-1 overflow-hidden">
         <div
-          id="scrollRef"
           ref={scrollRef}
-          className="h-full overflow-hidden overflow-y-auto"
+          className="h-full overflow-y-auto p-4 bg-white dark:bg-gray-900"
         >
-          <div
-            id="image-wrapper"
-            className="w-full max-w-screen-xl m-auto dark:bg-[#101014]"
-            className={isMobile ? 'p-2' : 'p-4'}
-          >
-            {/* 数据为空时的显示 */}
-            {dataSources.length === 0 ? (
-              <Space align="center" className="mt-4 text-center text-neutral-300">
-                <Spin className="mr-2 text-3xl" />
-                <span>Aha~</span>
-              </Space>
-            ) : (
-              // 数据存在时渲染 Message 组件列表
-              <div>
-                {dataSources.map((item, index) => (
-                  <MessageComponent
-                    key={index}
-                    dateTime={item.dateTime}
-                    text={item.text}
-                    inversion={item.inversion}
-                    error={item.error}
-                    loading={item.loading}
-                    onRegenerate={() => console.log(`重新生成: ${index}`)}
-                    onDelete={() => console.log(`删除: ${index}`)}
-                  />
-                ))}
+          <div className="max-w-3xl mx-auto">
+            {/* 消息列表 */}
+            {getCurrentMessages().map((message) => (
+              <div 
+                key={message.id} 
+                className={`flex mb-6 ${message.isUser ? 'justify-end' : 'justify-start'}`}
+              >
+                {!message.isUser && (
+                  <Avatar className="mr-3 bg-green-500">AI</Avatar>
+                )}
+                <div className={`max-w-[85%] ${message.isUser ? 'flex flex-col items-end' : 'flex flex-col items-start'}`}>
+                  <div className={`p-4 rounded-lg shadow-sm ${message.isUser ? 'bg-blue-500 text-white rounded-br-none' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-bl-none'}`}>
+                    {message.loading ? (
+                      <Space align="center">
+                        <Spin indicator={<LoadingOutlined spin />} />
+                        <span>正在思考...</span>
+                      </Space>
+                    ) : (
+                      <div className="whitespace-pre-wrap">{message.text}</div>
+                    )}
+                  </div>
+                  <div className="text-xs mt-1 text-gray-500 dark:text-gray-400">
+                    {message.dateTime.split('T')[1].slice(0, 5)}
+                  </div>
+                </div>
+                {message.isUser && (
+                  <Avatar className="ml-3 bg-blue-500">我</Avatar>
+                )}
+              </div>
+            ))}
+            
+            {/* 加载中指示器 */}
+            {loading && (
+              <div className="flex justify-start mb-6">
+                <Avatar className="mr-3 bg-green-500">AI</Avatar>
+                <div className="max-w-[85%] flex flex-col items-start">
+                  <div className="p-4 rounded-lg shadow-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-bl-none">
+                    <Space align="center">
+                      <Spin indicator={<LoadingOutlined spin />} />
+                      <span>正在思考...</span>
+                    </Space>
+                  </div>
+                </div>
               </div>
             )}
           </div>
         </div>
       </main>
+      
+      {/* 输入区域 */}
+      <div className="border-t bg-white dark:bg-gray-800 px-4 py-3">
+        <div className="max-w-3xl mx-auto">
+          {/* 显示调试信息 */}
+          <div className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+            <span className="mr-4">显示调试信息</span>
+            <span className="mr-4">上下文: {usingContext ? '开启' : '关闭'}</span>
+          </div>
+          
+          <TextArea
+            ref={inputRef}
+            value={inputValue}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder="来试试什么吧... (Shift + Enter 换行，Enter 发送)"
+            autoSize={{ minRows: 1, maxRows: 4 }}
+            className="mb-3 rounded-lg"
+          />
+          
+          <Space className="w-full justify-between">
+            <Space>
+              <Button type="text">清空对话</Button>
+              <Button type="text">导出记录</Button>
+            </Space>
+            <Space>
+              {loading && (
+                <Button onClick={() => setLoading(false)} icon={<CloseOutlined />}>
+                  取消
+                </Button>
+              )}
+              <Button
+                type="primary"
+                onClick={sendMessage}
+                disabled={!inputValue.trim() || loading}
+                icon={<SendOutlined />}
+              >
+                发送
+              </Button>
+            </Space>
+          </Space>
+        </div>
+      </div>
     </div>
   );
 };

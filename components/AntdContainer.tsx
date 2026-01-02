@@ -8,11 +8,21 @@ function AntdContainer({
 }: {
     children: React.ReactNode
 }) {
+    // 使用 antd 默认主题颜色
+    const themeConfig = {
+        token: {
+            colorPrimary: '#1890ff', // antd 默认蓝色
+            borderRadius: 6,
+        },
+    };
+    
     return (
-        <ConfigProvider locale={zhCN}>
+        <ConfigProvider 
+            locale={zhCN}
+            theme={themeConfig}
+        >
             {children}
         </ConfigProvider>
-
     )
 }
 
