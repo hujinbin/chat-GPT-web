@@ -1,10 +1,11 @@
 'use client';
-import React, { useState, useEffect, useRef } from 'react';
-import { Input, Button, Space, Spin, Avatar, Divider } from 'antd';
-import { SendOutlined, LoadingOutlined, CloseOutlined } from '@ant-design/icons';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Layout, Input, Button, Space, Spin, Avatar, Card, message } from 'antd';
+import { SendOutlined, LoadingOutlined, CloseOutlined, ApiOutlined, UserOutlined, PaperClipOutlined } from '@ant-design/icons';
 import HeaderComponent from '../components/HeaderComponent';
-import { chatCompletion } from '../api/index';
+import { chatCompletion, chatCompletionStream } from '../api/index';
 
+const { Content, Header, Footer } = Layout;
 const { TextArea } = Input;
 
 interface Message {
@@ -86,6 +87,9 @@ const ChatPage = ({ isMobile, currentChatId, onNewChat }: ChatPageProps) => {
   const sendMessage = async () => {
     if (!inputValue.trim() || loading || !currentChatId) return;
 
+    // 显示发送中提示
+    const sendingKey = message.loading('消息发送中...', 0);
+
     const userMessage: Message = {
       id: Date.now().toString(),
       text: inputValue.trim(),
@@ -101,34 +105,83 @@ const ChatPage = ({ isMobile, currentChatId, onNewChat }: ChatPageProps) => {
     setInputValue('');
     setLoading(true);
 
+    // 创建一个初始的AI消息（加载中）
+    const aiMessageId = (Date.now() + 1).toString();
+    const initialAiMessage: Message = {
+      id: aiMessageId,
+      text: '',
+      isUser: false,
+      dateTime: new Date().toISOString(),
+      loading: true,
+    };
+    saveCurrentMessages([...updatedMessages, initialAiMessage]);
+
     try {
-      // 这里调用实际的API
-      const response = await chatCompletion({
-        message: inputValue,
-        usingContext,
-      });
-
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: response.data?.content || '抱歉，我无法理解您的问题。',
-        isUser: false,
-        dateTime: new Date().toISOString(),
-      };
-
-      // 更新消息列表，添加AI回复
-      saveCurrentMessages([...updatedMessages, aiMessage]);
+      // 关闭发送中提示，显示AI正在思考
+      message.destroy(sendingKey);
+      const thinkingKey = message.loading('AI正在思考...', 0);
+      
+      // 使用流式API获取AI回复
+      await chatCompletionStream(
+        {
+          message: inputValue.trim(),
+          usingContext,
+        },
+        // onData回调：实时更新AI回复
+        (content: string) => {
+          // 第一次收到数据时关闭思考提示
+          if (content) {
+            message.destroy(thinkingKey);
+          }
+          
+          const currentMsgs = getCurrentMessages();
+          const updatedAiMessages = currentMsgs.map(msg => 
+            msg.id === aiMessageId 
+              ? { ...msg, text: msg.text + content, loading: false } 
+              : msg
+          );
+          saveCurrentMessages(updatedAiMessages);
+          scrollToBottom();
+        },
+        // onError回调：处理错误
+        (error: string) => {
+          message.destroy(thinkingKey);
+          message.error('获取AI回复失败');
+          
+          const currentMsgs = getCurrentMessages();
+          const updatedAiMessages = currentMsgs.map(msg => 
+            msg.id === aiMessageId 
+              ? { ...msg, text: error, error: true, loading: false } 
+              : msg
+          );
+          saveCurrentMessages(updatedAiMessages);
+        },
+        // onDone回调：完成AI回复
+        () => {
+          message.destroy(thinkingKey);
+          message.success('AI回复完成');
+          
+          const currentMsgs = getCurrentMessages();
+          const updatedAiMessages = currentMsgs.map(msg => 
+            msg.id === aiMessageId 
+              ? { ...msg, loading: false } 
+              : msg
+          );
+          saveCurrentMessages(updatedAiMessages);
+          scrollToBottom();
+        }
+      );
     } catch (error) {
       console.error('发送消息失败:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: '抱歉，发送消息失败，请稍后重试。',
-        isUser: false,
-        dateTime: new Date().toISOString(),
-        error: true,
-      };
-
-      // 更新消息列表，添加错误信息
-      saveCurrentMessages([...updatedMessages, errorMessage]);
+      message.error('发送消息失败，请稍后重试');
+      
+      const currentMsgs = getCurrentMessages();
+      const updatedAiMessages = currentMsgs.map(msg => 
+        msg.id === aiMessageId 
+          ? { ...msg, text: '抱歉，发送消息失败，请稍后重试。', error: true, loading: false } 
+          : msg
+      );
+      saveCurrentMessages(updatedAiMessages);
     } finally {
       setLoading(false);
     }
@@ -162,119 +215,171 @@ const ChatPage = ({ isMobile, currentChatId, onNewChat }: ChatPageProps) => {
     URL.revokeObjectURL(url);
   };
 
+  // 添加消息时的动画效果
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .animate-fadeIn {
+        animation-name: fadeIn;
+        animation-duration: 0.3s;
+        animation-timing-function: ease-out;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => document.head.removeChild(style);
+  }, []);
+
   return (
-    <div className="flex flex-col w-full h-full bg-gray-50 dark:bg-gray-900">
-      {/* 非移动端显示的头部 */}
-      {!isMobile && (
-        <div className="border-b bg-white dark:bg-gray-800 px-4 py-3 flex justify-between items-center">
-          <div className="text-lg font-semibold text-gray-900 dark:text-white">AI 聊天助手</div>
-          <HeaderComponent
-            usingContext={usingContext}
-            onExport={handleExport}
-            onToggleUsingContext={() => setUsingContext(!usingContext)}
-            onNewChat={onNewChat}
-          />
+    <Layout className="h-screen bg-gray-50">
+      {/* 顶部导航 */}
+      <Header className="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center shadow-sm transition-all duration-300">
+        <div className="flex items-center">
+          <ApiOutlined className="text-2xl text-blue-600 mr-3" />
+          <h1 className="text-xl font-bold text-gray-900">ChatGPT Web</h1>
         </div>
-      )}
+        <HeaderComponent
+          usingContext={usingContext}
+          onExport={handleExport}
+          onToggleUsingContext={() => setUsingContext(!usingContext)}
+          onNewChat={onNewChat}
+        />
+      </Header>
       
       {/* 主内容区域 */}
-      <main className="flex-1 overflow-hidden">
-        <div
-          ref={scrollRef}
-          className="h-full overflow-y-auto p-4 bg-white dark:bg-gray-900"
-        >
-          <div className="max-w-3xl mx-auto">
-            {/* 消息列表 */}
-            {getCurrentMessages().map((message) => (
-              <div 
-                key={message.id} 
-                className={`flex mb-6 ${message.isUser ? 'justify-end' : 'justify-start'}`}
-              >
-                {!message.isUser && (
-                  <Avatar className="mr-3 bg-green-500">AI</Avatar>
-                )}
-                <div className={`max-w-[85%] ${message.isUser ? 'flex flex-col items-end' : 'flex flex-col items-start'}`}>
-                  <div className={`p-4 rounded-lg shadow-sm ${message.isUser ? 'bg-blue-500 text-white rounded-br-none' : 'bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-bl-none'}`}>
-                    {message.loading ? (
+      <Content className="flex-1 overflow-hidden bg-gray-50">
+        <div className="h-full flex flex-col p-6">
+          <div 
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto mb-6"
+          >
+            <div className="max-w-3xl mx-auto">
+              {/* 消息列表 */}
+              {getCurrentMessages().map((message, index) => (
+                <div 
+                  key={message.id} 
+                  className={`flex mb-8 ${message.isUser ? 'justify-end' : 'justify-start'} opacity-0 animate-fadeIn`}
+                  style={{ animationDelay: `${index * 100}ms`, animationFillMode: 'forwards' }}
+                >
+                  <div className={`flex items-start max-w-[85%] ${message.isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                    <Avatar 
+                      icon={message.isUser ? <UserOutlined /> : <ApiOutlined />} 
+                      className={`${message.isUser ? 'bg-blue-600 ml-3 shadow-md' : 'bg-green-600 mr-3 shadow-md'} transition-all duration-300 hover:scale-105`}
+                      size={40}
+                    />
+                    <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'}`}>
+                      <div className="mb-1 flex items-center">
+                        <span className="text-sm font-medium text-gray-700">
+                          {message.isUser ? '我' : 'AI助手'}
+                        </span>
+                        <span className="text-xs text-gray-500 ml-2">
+                          {message.dateTime.split('T')[1].slice(0, 5)}
+                        </span>
+                      </div>
+                      <div 
+                        className={`px-5 py-3 rounded-lg shadow-sm transition-all duration-300 ${message.isUser 
+                          ? 'bg-blue-600 text-white rounded-tr-none hover:shadow-md' 
+                          : 'bg-white text-gray-900 rounded-tl-none hover:shadow-md'}`}
+                        style={{ borderRadius: message.isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px' }}
+                      >
+                        {message.loading ? (
+                          <div className="flex items-center space-x-2">
+                            <Spin indicator={<LoadingOutlined spin />} />
+                            <span>正在思考...</span>
+                          </div>
+                        ) : message.error ? (
+                          <div className="text-red-100 font-medium">{message.text}</div>
+                        ) : (
+                          <div className="whitespace-pre-wrap text-base leading-relaxed">{message.text}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              
+              {/* 加载中指示器 */}
+              {loading && (
+                <div className="flex justify-start mb-8">
+                  <Avatar className="mr-3 bg-green-600" size={40} icon={<ApiOutlined />} />
+                  <div className="flex flex-col items-start">
+                    <Card 
+                      className="bg-white text-gray-900 border-gray-200 shadow-sm"
+                      bordered
+                      bodyStyle={{ padding: '16px', borderRadius: '12px' }}
+                    >
                       <Space align="center">
                         <Spin indicator={<LoadingOutlined spin />} />
                         <span>正在思考...</span>
                       </Space>
-                    ) : (
-                      <div className="whitespace-pre-wrap">{message.text}</div>
-                    )}
-                  </div>
-                  <div className="text-xs mt-1 text-gray-500 dark:text-gray-400">
-                    {message.dateTime.split('T')[1].slice(0, 5)}
+                    </Card>
                   </div>
                 </div>
-                {message.isUser && (
-                  <Avatar className="ml-3 bg-blue-500">我</Avatar>
-                )}
-              </div>
-            ))}
-            
-            {/* 加载中指示器 */}
-            {loading && (
-              <div className="flex justify-start mb-6">
-                <Avatar className="mr-3 bg-green-500">AI</Avatar>
-                <div className="max-w-[85%] flex flex-col items-start">
-                  <div className="p-4 rounded-lg shadow-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-bl-none">
-                    <Space align="center">
-                      <Spin indicator={<LoadingOutlined spin />} />
-                      <span>正在思考...</span>
-                    </Space>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </main>
-      
-      {/* 输入区域 */}
-      <div className="border-t bg-white dark:bg-gray-800 px-4 py-3">
-        <div className="max-w-3xl mx-auto">
-          {/* 显示调试信息 */}
-          <div className="mb-3 text-xs text-gray-500 dark:text-gray-400">
-            <span className="mr-4">显示调试信息</span>
-            <span className="mr-4">上下文: {usingContext ? '开启' : '关闭'}</span>
-          </div>
-          
-          <TextArea
-            ref={inputRef}
-            value={inputValue}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder="来试试什么吧... (Shift + Enter 换行，Enter 发送)"
-            autoSize={{ minRows: 1, maxRows: 4 }}
-            className="mb-3 rounded-lg"
-          />
-          
-          <Space className="w-full justify-between">
-            <Space>
-              <Button type="text">清空对话</Button>
-              <Button type="text">导出记录</Button>
-            </Space>
-            <Space>
-              {loading && (
-                <Button onClick={() => setLoading(false)} icon={<CloseOutlined />}>
-                  取消
-                </Button>
               )}
-              <Button
-                type="primary"
-                onClick={sendMessage}
-                disabled={!inputValue.trim() || loading}
-                icon={<SendOutlined />}
-              >
-                发送
-              </Button>
+            </div>
+          </div>
+          
+          {/* 输入区域 */}
+          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-200 transition-all duration-300 hover:shadow-xl">
+            <TextArea
+              ref={inputRef}
+              value={inputValue}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="来试试什么吧... (Shift + Enter 换行，Enter 发送)"
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              className="border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 mb-3 transition-all duration-300"
+              style={{ borderRadius: '8px' }}
+            />
+            
+            <Space className="w-full justify-between">
+              <Space>
+                <Button 
+                  type="default" 
+                  danger={usingContext} 
+                  onClick={() => setUsingContext(!usingContext)}
+                  className="transition-all duration-300 hover:shadow-md"
+                >
+                  上下文: {usingContext ? '开启' : '关闭'}
+                </Button>
+              </Space>
+              <Space>
+                {loading && (
+                  <Button 
+                    onClick={() => setLoading(false)} 
+                    icon={<CloseOutlined />}
+                    className="transition-all duration-300 hover:bg-red-50 hover:text-red-600"
+                  >
+                    取消
+                  </Button>
+                )}
+                <Button
+                  type="primary"
+                  onClick={sendMessage}
+                  disabled={!inputValue.trim() || loading}
+                  loading={loading}
+                  icon={<SendOutlined />}
+                  className="bg-blue-600 hover:bg-blue-700 transition-all duration-300 hover:shadow-md"
+                >
+                  发送
+                </Button>
+              </Space>
             </Space>
-          </Space>
+            <div className="text-xs text-gray-500 text-center mt-2">
+              按 Enter 发送消息，Shift + Enter 换行
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      </Content>
+      
+      {/* 底部信息 */}
+      <Footer className="bg-white border-t border-gray-200 text-center text-gray-500 py-4">
+        AI 聊天助手 ©2024
+      </Footer>
+    </Layout>
   );
 };
 
