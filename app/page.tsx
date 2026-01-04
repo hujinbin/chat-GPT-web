@@ -1,386 +1,542 @@
 'use client';
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Layout, Input, Button, Space, Spin, Avatar, Card, message } from 'antd';
-import { SendOutlined, LoadingOutlined, CloseOutlined, ApiOutlined, UserOutlined, PaperClipOutlined } from '@ant-design/icons';
-import HeaderComponent from '../components/HeaderComponent';
-import { chatCompletion, chatCompletionStream } from '../api/index';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import {
+  Layout,
+  Input,
+  Button,
+  Space,
+  Spin,
+  Avatar,
+  message,
+  Empty
+} from 'antd';
+import {
+  SendOutlined,
+  LoadingOutlined,
+  CloseOutlined,
+  ApiOutlined,
+  UserOutlined,
+  MenuOutlined
+} from '@ant-design/icons';
+import HeaderComponent from '@/components/HeaderComponent';
+import Sider from '@/components/Sider';
+import { chatCompletionStream } from '@/api/index';
 
 const { Content, Header, Footer } = Layout;
 const { TextArea } = Input;
 
-interface Message {
+interface ChatMessage {
   id: string;
-  text: string;
-  isUser: boolean;
-  dateTime: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
   error?: boolean;
   loading?: boolean;
 }
 
-interface ChatPageProps {
-  isMobile: boolean;
-  currentChatId: string;
-  onNewChat: () => void;
-}
-
 interface ChatSession {
-  chatId: string;
-  messages: Message[];
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  isStarred: boolean;
+  messages: ChatMessage[];
 }
 
-const ChatPage = ({ isMobile, currentChatId, onNewChat }: ChatPageProps) => {
-  // 管理多个聊天会话
+const formatTime = (iso: string) => {
+  const date = new Date(iso);
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return sameDay
+    ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+};
+
+const ChatApp = () => {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  
+  const [currentChatId, setCurrentChatId] = useState('');
   const [inputValue, setInputValue] = useState('');
-  const [loading, setLoading] = useState(false);
   const [usingContext, setUsingContext] = useState(true);
-
-  // 获取当前聊天会话的消息
-  const getCurrentMessages = (): Message[] => {
-    const currentSession = chatSessions.find(session => session.chatId === currentChatId);
-    return currentSession ? currentSession.messages : [];
-  };
-
-  // 保存当前聊天会话的消息
-  const saveCurrentMessages = (messages: Message[]) => {
-    setChatSessions(prevSessions => {
-      const sessionIndex = prevSessions.findIndex(session => session.chatId === currentChatId);
-      if (sessionIndex >= 0) {
-        // 更新现有会话
-        return prevSessions.map((session, index) => 
-          index === sessionIndex ? { ...session, messages } : session
-        );
-      } else {
-        // 创建新会话
-        return [...prevSessions, { chatId: currentChatId, messages }];
-      }
-    });
-  };
-
-  // 当currentChatId变化时，初始化新聊天会话
-  useEffect(() => {
-    if (currentChatId && !chatSessions.find(session => session.chatId === currentChatId)) {
-      const initialMessages: Message[] = [
-        {
-          id: '1',
-          text: '你好！我是AI助手，有什么可以帮助你的吗？',
-          isUser: false,
-          dateTime: new Date().toISOString(),
-        },
-      ];
-      saveCurrentMessages(initialMessages);
-    }
-  }, [currentChatId]);
-  
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isSiderCollapsed, setIsSiderCollapsed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const streamingAbortRef = useRef<AbortController | null>(null);
+  const closeMessageRef = useRef<(() => void) | null>(null);
 
-  // 滚动到底部
-  const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  };
-
-  // 发送消息
-  const sendMessage = async () => {
-    if (!inputValue.trim() || loading || !currentChatId) return;
-
-    // 显示发送中提示
-    const sendingKey = message.loading('消息发送中...', 0);
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: inputValue.trim(),
-      isUser: true,
-      dateTime: new Date().toISOString(),
-    };
-
-    // 获取当前消息列表并添加用户消息
-    const currentMessages = getCurrentMessages();
-    const updatedMessages = [...currentMessages, userMessage];
-    saveCurrentMessages(updatedMessages);
-    
-    setInputValue('');
-    setLoading(true);
-
-    // 创建一个初始的AI消息（加载中）
-    const aiMessageId = (Date.now() + 1).toString();
-    const initialAiMessage: Message = {
-      id: aiMessageId,
-      text: '',
-      isUser: false,
-      dateTime: new Date().toISOString(),
-      loading: true,
-    };
-    saveCurrentMessages([...updatedMessages, initialAiMessage]);
-
-    try {
-      // 关闭发送中提示，显示AI正在思考
-      message.destroy(sendingKey);
-      const thinkingKey = message.loading('AI正在思考...', 0);
-      
-      // 使用流式API获取AI回复
-      await chatCompletionStream(
-        {
-          message: inputValue.trim(),
-          usingContext,
-        },
-        // onData回调：实时更新AI回复
-        (content: string) => {
-          // 第一次收到数据时关闭思考提示
-          if (content) {
-            message.destroy(thinkingKey);
-          }
-          
-          const currentMsgs = getCurrentMessages();
-          const updatedAiMessages = currentMsgs.map(msg => 
-            msg.id === aiMessageId 
-              ? { ...msg, text: msg.text + content, loading: false } 
-              : msg
-          );
-          saveCurrentMessages(updatedAiMessages);
-          scrollToBottom();
-        },
-        // onError回调：处理错误
-        (error: string) => {
-          message.destroy(thinkingKey);
-          message.error('获取AI回复失败');
-          
-          const currentMsgs = getCurrentMessages();
-          const updatedAiMessages = currentMsgs.map(msg => 
-            msg.id === aiMessageId 
-              ? { ...msg, text: error, error: true, loading: false } 
-              : msg
-          );
-          saveCurrentMessages(updatedAiMessages);
-        },
-        // onDone回调：完成AI回复
-        () => {
-          message.destroy(thinkingKey);
-          message.success('AI回复完成');
-          
-          const currentMsgs = getCurrentMessages();
-          const updatedAiMessages = currentMsgs.map(msg => 
-            msg.id === aiMessageId 
-              ? { ...msg, loading: false } 
-              : msg
-          );
-          saveCurrentMessages(updatedAiMessages);
-          scrollToBottom();
-        }
-      );
-    } catch (error) {
-      console.error('发送消息失败:', error);
-      message.error('发送消息失败，请稍后重试');
-      
-      const currentMsgs = getCurrentMessages();
-      const updatedAiMessages = currentMsgs.map(msg => 
-        msg.id === aiMessageId 
-          ? { ...msg, text: '抱歉，发送消息失败，请稍后重试。', error: true, loading: false } 
-          : msg
-      );
-      saveCurrentMessages(updatedAiMessages);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 处理输入框变化
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInputValue(e.target.value);
-  };
-
-  // 处理按键事件
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  // 导出聊天记录
-  const handleExport = () => {
-    const exportContent = getCurrentMessages()
-      .map(msg => `${msg.isUser ? '我' : 'AI'}: ${msg.text}`)
-      .join('\n\n');
-    
-    const blob = new Blob([exportContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `chat_${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // 添加消息时的动画效果
   useEffect(() => {
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-      .animate-fadeIn {
-        animation-name: fadeIn;
-        animation-duration: 0.3s;
-        animation-timing-function: ease-out;
-      }
-    `;
-    document.head.appendChild(style);
-    return () => document.head.removeChild(style);
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 992);
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    setIsSiderCollapsed(isMobile);
+  }, [isMobile]);
+
+  const currentSession = useMemo(
+    () => chatSessions.find(session => session.id === currentChatId),
+    [chatSessions, currentChatId]
+  );
+
+  const messages = currentSession?.messages ?? [];
+
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    });
+  }, []);
+
+  const handleCreateChat = useCallback(() => {
+    streamingAbortRef.current?.abort();
+    streamingAbortRef.current = null;
+    closeMessageRef.current?.();
+    closeMessageRef.current = null;
+    setIsStreaming(false);
+
+    const id = `chat-${Date.now()}`;
+    const now = new Date().toISOString();
+    const welcomeMessage: ChatMessage = {
+      id: `${id}-welcome`,
+      role: 'assistant',
+      content: '你好！我是AI助手，有什么可以帮助你的吗？',
+      createdAt: now
+    };
+
+    setChatSessions(prev => [
+      {
+        id,
+        title: '新建聊天',
+        createdAt: now,
+        updatedAt: now,
+        isStarred: false,
+        messages: [welcomeMessage]
+      },
+      ...prev
+    ]);
+    setCurrentChatId(id);
+    setInputValue('');
+  }, []);
+
+  useEffect(() => {
+    if (!chatSessions.length) {
+      handleCreateChat();
+    }
+  }, [chatSessions.length, handleCreateChat]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages.length, scrollToBottom]);
+
+  const handleDeleteChat = useCallback((chatId: string) => {
+    setChatSessions(prev => {
+      const filtered = prev.filter(session => session.id !== chatId);
+      if (!filtered.length) {
+        setCurrentChatId('');
+      } else if (currentChatId === chatId) {
+        setCurrentChatId(filtered[0].id);
+      }
+      return filtered;
+    });
+  }, [currentChatId]);
+
+  const handleToggleStar = useCallback((chatId: string) => {
+    setChatSessions(prev =>
+      prev.map(session =>
+        session.id === chatId
+          ? { ...session, isStarred: !session.isStarred }
+          : session
+      )
+    );
+  }, []);
+
+  const handleRenameChat = useCallback((chatId: string, nextTitle: string) => {
+    setChatSessions(prev =>
+      prev.map(session =>
+        session.id === chatId ? { ...session, title: nextTitle } : session
+      )
+    );
+  }, []);
+
+  const handleClearAll = useCallback(() => {
+    streamingAbortRef.current?.abort();
+    streamingAbortRef.current = null;
+    closeMessageRef.current?.();
+    closeMessageRef.current = null;
+    setIsStreaming(false);
+    setChatSessions([]);
+    setCurrentChatId('');
+  }, []);
+
+  const appendMessages = useCallback((chatId: string, newMessages: ChatMessage[]) => {
+    setChatSessions(prev =>
+      prev.map(session =>
+        session.id === chatId
+          ? {
+              ...session,
+              messages: [...session.messages, ...newMessages],
+              updatedAt: new Date().toISOString()
+            }
+          : session
+      )
+    );
+  }, []);
+
+  const updateMessage = useCallback(
+    (chatId: string, messageId: string, updater: (message: ChatMessage) => ChatMessage) => {
+      setChatSessions(prev =>
+        prev.map(session =>
+          session.id === chatId
+            ? {
+                ...session,
+                messages: session.messages.map(msg =>
+                  msg.id === messageId ? updater(msg) : msg
+                ),
+                updatedAt: new Date().toISOString()
+              }
+            : session
+        )
+      );
+    },
+    []
+  );
+
+  const handleExport = useCallback(() => {
+    if (!messages.length) {
+      message.info('当前会话暂无内容');
+      return;
+    }
+    const text = messages
+      .map(msg => `${msg.role === 'user' ? '我' : 'AI'}: ${msg.content}`)
+      .join('\n\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `chat_${new Date().toISOString().slice(0, 10)}.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [messages]);
+
+  const stopStreaming = useCallback((chatId: string, assistantMessageId: string) => {
+    streamingAbortRef.current?.abort();
+    streamingAbortRef.current = null;
+    closeMessageRef.current?.();
+    closeMessageRef.current = null;
+    setIsStreaming(false);
+    updateMessage(chatId, assistantMessageId, msg => ({
+      ...msg,
+      loading: false,
+      error: true,
+      content: msg.content ? msg.content : '回复已取消'
+    }));
+  }, [updateMessage]);
+
+  const handleSendMessage = useCallback(async () => {
+    if (!currentSession || !inputValue.trim() || isStreaming) {
+      return;
+    }
+
+    const chatId = currentSession.id;
+    const userText = inputValue.trim();
+    const now = new Date().toISOString();
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: userText,
+      createdAt: now
+    };
+    const assistantId = `assistant-${Date.now() + 1}`;
+    const assistantMessage: ChatMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      createdAt: now,
+      loading: true
+    };
+    const historyPayload = usingContext
+      ? [...currentSession.messages, userMessage].map(item => ({
+          role: item.role,
+          content: item.content
+        }))
+      : undefined;
+
+    appendMessages(chatId, [userMessage, assistantMessage]);
+    setInputValue('');
+    setIsStreaming(true);
+
+    const hideSending = message.loading('AI 正在回复...', 0);
+    closeMessageRef.current = hideSending;
+
+    const controller = new AbortController();
+    streamingAbortRef.current = controller;
+
+    try {
+      await chatCompletionStream(
+        {
+          message: userText,
+          usingContext,
+          history: historyPayload
+        },
+        chunk => {
+          closeMessageRef.current?.();
+          closeMessageRef.current = null;
+          updateMessage(chatId, assistantId, msg => ({
+            ...msg,
+            content: `${msg.content}${chunk}`,
+            loading: false,
+            error: false
+          }));
+          scrollToBottom();
+        },
+        error => {
+          closeMessageRef.current?.();
+          closeMessageRef.current = null;
+          if (error === '请求已取消') {
+            return;
+          }
+          message.error(error || '获取 AI 回复失败');
+          updateMessage(chatId, assistantId, msg => ({
+            ...msg,
+            content: error,
+            loading: false,
+            error: true
+          }));
+          setIsStreaming(false);
+        },
+        () => {
+          closeMessageRef.current?.();
+          closeMessageRef.current = null;
+          setIsStreaming(false);
+          updateMessage(chatId, assistantId, msg => ({
+            ...msg,
+            loading: false
+          }));
+          scrollToBottom();
+        },
+        { signal: controller.signal }
+      );
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        stopStreaming(chatId, assistantId);
+      } else {
+        console.error('发送消息失败', error);
+        message.error('发送消息失败，请稍后重试');
+        updateMessage(chatId, assistantId, msg => ({
+          ...msg,
+          content: '抱歉，发送消息失败，请稍后重试。',
+          loading: false,
+          error: true
+        }));
+        setIsStreaming(false);
+      }
+    }
+  }, [appendMessages, currentSession, inputValue, isStreaming, scrollToBottom, stopStreaming, updateMessage, usingContext]);
+
+  const handleCancelStreaming = useCallback(() => {
+    if (!currentSession || !isStreaming || !streamingAbortRef.current) {
+      return;
+    }
+    streamingAbortRef.current.abort();
+  }, [currentSession, isStreaming]);
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        handleSendMessage();
+      }
+    },
+    [handleSendMessage]
+  );
+
+  const sidebarChats = useMemo(
+    () =>
+      chatSessions.map(session => {
+        const lastMessage = session.messages[session.messages.length - 1];
+        return {
+          id: session.id,
+          title: session.title,
+          subtitle: formatTime(session.updatedAt),
+          lastMessage: lastMessage?.content || '',
+          isStarred: session.isStarred
+        };
+      }),
+    [chatSessions]
+  );
+
   return (
-    <Layout className="h-screen bg-gray-50">
-      {/* 顶部导航 */}
-      <Header className="bg-white border-b border-gray-200 px-6 py-3 flex justify-between items-center shadow-sm transition-all duration-300">
-        <div className="flex items-center">
-          <ApiOutlined className="text-2xl text-blue-600 mr-3" />
-          <h1 className="text-xl font-bold text-gray-900">ChatGPT Web</h1>
-        </div>
-        <HeaderComponent
-          usingContext={usingContext}
-          onExport={handleExport}
-          onToggleUsingContext={() => setUsingContext(!usingContext)}
-          onNewChat={onNewChat}
-        />
-      </Header>
-      
-      {/* 主内容区域 */}
-      <Content className="flex-1 overflow-hidden bg-gray-50">
-        <div className="h-full flex flex-col p-6">
-          <div 
-            ref={scrollRef}
-            className="flex-1 overflow-y-auto mb-6"
-          >
-            <div className="max-w-3xl mx-auto">
-              {/* 消息列表 */}
-              {getCurrentMessages().map((message, index) => (
-                <div 
-                  key={message.id} 
-                  className={`flex mb-8 ${message.isUser ? 'justify-end' : 'justify-start'} opacity-0 animate-fadeIn`}
-                  style={{ animationDelay: `${index * 100}ms`, animationFillMode: 'forwards' }}
-                >
-                  <div className={`flex items-start max-w-[85%] ${message.isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-                    <Avatar 
-                      icon={message.isUser ? <UserOutlined /> : <ApiOutlined />} 
-                      className={`${message.isUser ? 'bg-blue-600 ml-3 shadow-md' : 'bg-green-600 mr-3 shadow-md'} transition-all duration-300 hover:scale-105`}
-                      size={40}
-                    />
-                    <div className={`flex flex-col ${message.isUser ? 'items-end' : 'items-start'}`}>
-                      <div className="mb-1 flex items-center">
-                        <span className="text-sm font-medium text-gray-700">
-                          {message.isUser ? '我' : 'AI助手'}
-                        </span>
-                        <span className="text-xs text-gray-500 ml-2">
-                          {message.dateTime.split('T')[1].slice(0, 5)}
-                        </span>
-                      </div>
-                      <div 
-                        className={`px-5 py-3 rounded-lg shadow-sm transition-all duration-300 ${message.isUser 
-                          ? 'bg-blue-600 text-white rounded-tr-none hover:shadow-md' 
-                          : 'bg-white text-gray-900 rounded-tl-none hover:shadow-md'}`}
-                        style={{ borderRadius: message.isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px' }}
+    <Layout className="h-screen bg-[#f3f5f9]">
+      <Sider
+        currentChatId={currentChatId}
+        chats={sidebarChats}
+        onChatSelect={setCurrentChatId}
+        onNewChat={handleCreateChat}
+        onDeleteChat={handleDeleteChat}
+        onToggleStar={handleToggleStar}
+        onRenameChat={handleRenameChat}
+        onClearAll={handleClearAll}
+        isMobile={isMobile}
+        collapsed={isSiderCollapsed}
+        onCollapseChange={setIsSiderCollapsed}
+      />
+      <Layout className="h-full bg-transparent">
+        <Header className={`flex items-center justify-between bg-white shadow-sm ${isMobile ? 'px-4 py-3' : 'px-8 py-4'}`}>
+          <div className={`flex items-center ${isMobile ? 'gap-2' : 'gap-3'}`}>
+            {isMobile && (
+              <Button
+                type="text"
+                icon={<MenuOutlined />}
+                onClick={() => setIsSiderCollapsed(prev => !prev)}
+                aria-label="切换侧边栏"
+              />
+            )}
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-100 text-green-600">
+              <ApiOutlined className="text-xl" />
+            </div>
+            <div>
+              <div className="text-lg font-semibold text-gray-900">AI 聊天助手</div>
+              <div className="text-xs text-gray-500">GPT 驱动的智能对话</div>
+            </div>
+          </div>
+          <HeaderComponent
+            usingContext={usingContext}
+            onExport={handleExport}
+            onToggleUsingContext={() => setUsingContext(prev => !prev)}
+            onNewChat={handleCreateChat}
+            isMobile={isMobile}
+          />
+        </Header>
+        <Content className="flex-1 overflow-hidden">
+          {currentSession ? (
+            <div className={`flex h-full flex-col ${isMobile ? 'px-4 py-4' : 'px-10 py-6'}`}>
+              <div
+                ref={scrollRef}
+                className={`flex-1 overflow-y-auto ${isMobile ? 'pr-1' : 'pr-2'}`}
+              >
+                {messages.length === 0 ? (
+                  <div className="flex h-full items-center justify-center">
+                    <Empty description="开始新的对话吧" />
+                  </div>
+                ) : (
+                  messages.map(messageItem => {
+                    const isUser = messageItem.role === 'user';
+                    return (
+                      <div
+                        key={messageItem.id}
+                        className={`mb-6 flex ${isUser ? 'justify-end' : 'justify-start'}`}
                       >
-                        {message.loading ? (
-                          <div className="flex items-center space-x-2">
-                            <Spin indicator={<LoadingOutlined spin />} />
-                            <span>正在思考...</span>
+                        <div className={`flex ${isMobile ? 'max-w-[85%]' : 'max-w-[70%]'} items-start ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                          <Avatar
+                            size={isMobile ? 32 : 40}
+                            className={isUser ? 'ml-3 bg-green-500 text-white' : 'mr-3 bg-gray-200 text-green-600'}
+                            icon={isUser ? <UserOutlined /> : <ApiOutlined />}
+                          />
+                          <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+                            <div className="mb-1 flex items-center gap-2">
+                              <span className="text-xs font-medium text-gray-600">
+                                {isUser ? '我' : 'AI 助手'}
+                              </span>
+                              <span className="text-[11px] text-gray-400">
+                                {formatTime(messageItem.createdAt)}
+                              </span>
+                            </div>
+                            <div
+                              className={`${
+                                isUser
+                                  ? 'rounded-3xl rounded-tr-md bg-green-500 text-white'
+                                  : 'rounded-3xl rounded-tl-md bg-white text-gray-900 shadow'
+                              } ${isMobile ? 'px-4 py-2' : 'px-5 py-3'} text-sm leading-6`}
+                            >
+                              {messageItem.loading ? (
+                                <Space align="center">
+                                  <Spin indicator={<LoadingOutlined spin />} size="small" />
+                                  <span>正在思考...</span>
+                                </Space>
+                              ) : messageItem.error ? (
+                                <span className="text-red-500">{messageItem.content}</span>
+                              ) : (
+                                <span className="whitespace-pre-wrap">{messageItem.content}</span>
+                              )}
+                            </div>
                           </div>
-                        ) : message.error ? (
-                          <div className="text-red-100 font-medium">{message.text}</div>
-                        ) : (
-                          <div className="whitespace-pre-wrap text-base leading-relaxed">{message.text}</div>
-                        )}
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              
-              {/* 加载中指示器 */}
-              {loading && (
-                <div className="flex justify-start mb-8">
-                  <Avatar className="mr-3 bg-green-600" size={40} icon={<ApiOutlined />} />
-                  <div className="flex flex-col items-start">
-                    <Card 
-                      className="bg-white text-gray-900 border-gray-200 shadow-sm"
-                      bordered
-                      bodyStyle={{ padding: '16px', borderRadius: '12px' }}
-                    >
-                      <Space align="center">
-                        <Spin indicator={<LoadingOutlined spin />} />
-                        <span>正在思考...</span>
-                      </Space>
-                    </Card>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-          
-          {/* 输入区域 */}
-          <div className="bg-white rounded-xl shadow-sm p-4 border border-gray-200 transition-all duration-300 hover:shadow-xl">
-            <TextArea
-              ref={inputRef}
-              value={inputValue}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder="来试试什么吧... (Shift + Enter 换行，Enter 发送)"
-              autoSize={{ minRows: 1, maxRows: 4 }}
-              className="border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 mb-3 transition-all duration-300"
-              style={{ borderRadius: '8px' }}
-            />
-            
-            <Space className="w-full justify-between">
-              <Space>
-                <Button 
-                  type="default" 
-                  danger={usingContext} 
-                  onClick={() => setUsingContext(!usingContext)}
-                  className="transition-all duration-300 hover:shadow-md"
-                >
-                  上下文: {usingContext ? '开启' : '关闭'}
-                </Button>
-              </Space>
-              <Space>
-                {loading && (
-                  <Button 
-                    onClick={() => setLoading(false)} 
-                    icon={<CloseOutlined />}
-                    className="transition-all duration-300 hover:bg-red-50 hover:text-red-600"
-                  >
-                    取消
-                  </Button>
+                    );
+                  })
                 )}
-                <Button
-                  type="primary"
-                  onClick={sendMessage}
-                  disabled={!inputValue.trim() || loading}
-                  loading={loading}
-                  icon={<SendOutlined />}
-                  className="bg-blue-600 hover:bg-blue-700 transition-all duration-300 hover:shadow-md"
-                >
-                  发送
-                </Button>
-              </Space>
-            </Space>
-            <div className="text-xs text-gray-500 text-center mt-2">
-              按 Enter 发送消息，Shift + Enter 换行
+              </div>
+              <div className={`mt-4 rounded-2xl border border-gray-200 bg-white shadow-sm ${isMobile ? 'p-3' : 'p-4'}`}>
+                <TextArea
+                  value={inputValue}
+                  onChange={event => setInputValue(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="来说点什么吧… (Shift + Enter 换行，Enter 发送)"
+                  autoSize={{ minRows: 1, maxRows: isMobile ? 3 : 5 }}
+                  style={{ borderRadius: 12 }}
+                />
+                <div className={`mt-3 flex ${isMobile ? 'flex-col gap-2' : 'items-center justify-between'}`}>
+                  <Button
+                    type="text"
+                    onClick={() => setUsingContext(prev => !prev)}
+                    className={isMobile ? 'w-full text-left' : ''}
+                  >
+                    上下文 {usingContext ? '已开启' : '已关闭'}
+                  </Button>
+                  <Space
+                    wrap
+                    size={isMobile ? 8 : 12}
+                    className={isMobile ? 'flex w-full justify-end' : undefined}
+                  >
+                    {isStreaming && (
+                      <Button
+                        onClick={handleCancelStreaming}
+                        icon={<CloseOutlined />}
+                        block={isMobile}
+                      >
+                        停止生成
+                      </Button>
+                    )}
+                    <Button
+                      type="primary"
+                      icon={<SendOutlined />}
+                      disabled={!inputValue.trim() || isStreaming}
+                      onClick={handleSendMessage}
+                      block={isMobile}
+                    >
+                      发送
+                    </Button>
+                  </Space>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </Content>
-      
-      {/* 底部信息 */}
-      <Footer className="bg-white border-t border-gray-200 text-center text-gray-500 py-4">
-        AI 聊天助手 ©2024
-      </Footer>
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <Empty description="请选择或新建聊天" />
+            </div>
+          )}
+        </Content>
+        <Footer className="bg-transparent text-center text-xs text-gray-400 py-3">
+          AI 聊天助手 ©2024
+        </Footer>
+      </Layout>
     </Layout>
   );
 };
 
-export default ChatPage;
+export default ChatApp;

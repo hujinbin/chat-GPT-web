@@ -10,7 +10,13 @@ export const chatCompletion = (param: any) => {
 };
 
 // Streaming Chat Completion
-export const chatCompletionStream = async (param: any, onData: (data: string) => void, onError: (error: string) => void, onDone: () => void) => {
+export const chatCompletionStream = async (
+    param: any,
+    onData: (data: string) => void,
+    onError: (error: string) => void,
+    onDone: () => void,
+    options?: { signal?: AbortSignal }
+) => {
     try {
         const response = await fetch('/api/ai/chat/stream', {
             method: 'POST',
@@ -23,8 +29,11 @@ export const chatCompletionStream = async (param: any, onData: (data: string) =>
                         role: 'user',
                         content: param.message
                     }
-                ]
+                ],
+                usingContext: param.usingContext,
+                history: param.history
             }),
+            signal: options?.signal
         });
 
         if (!response.ok) {
@@ -91,6 +100,11 @@ export const chatCompletionStream = async (param: any, onData: (data: string) =>
             }
         }
     } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+            onError('请求已取消');
+            throw error;
+        }
+
         console.error('Streaming request failed:', error);
         onError(error instanceof Error ? error.message : '连接出错，请重试');
     }
