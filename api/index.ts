@@ -1,4 +1,6 @@
 import request from '../utils/request';
+import type { AxiosProgressEvent } from 'axios';
+import { CanceledError } from 'axios';
 
 // Chat Completion
 export const chatCompletion = (param: any) => {
@@ -17,90 +19,94 @@ export const chatCompletionStream = async (
     onDone: () => void,
     options?: { signal?: AbortSignal }
 ) => {
+    let buffer = '';
+    let lastIndex = 0;
+    let hasCompleted = false;
+
+    const flushBuffer = (isFinal: boolean) => {
+        if (!buffer) return;
+
+        const segments = buffer.split('\n\n');
+        if (!isFinal) {
+            buffer = segments.pop() || '';
+        }
+
+        for (const segment of segments) {
+            if (!segment.startsWith('data:')) continue;
+
+            const data = segment.slice(5).trim();
+            if (data === '[DONE]') {
+                if (!hasCompleted) {
+                    hasCompleted = true;
+                    onDone();
+                }
+                return;
+            }
+
+            try {
+                const parsed = JSON.parse(data);
+                if (parsed.type === 'error') {
+                    onError(parsed.message);
+                    hasCompleted = true;
+                    return;
+                }
+                if (parsed.content) {
+                    onData(parsed.content);
+                }
+            } catch (e) {
+                console.error('Error parsing SSE message:', e);
+            }
+        }
+
+        if (isFinal) {
+            buffer = '';
+        }
+    };
+
+    const handleProgress = (progressEvent: AxiosProgressEvent) => {
+        if (hasCompleted) return;
+
+        const xhr = progressEvent.event?.target as XMLHttpRequest | null;
+        const responseText = xhr?.responseText ?? '';
+        const chunk = responseText.slice(lastIndex);
+
+        if (!chunk) return;
+
+        lastIndex = responseText.length;
+        buffer += chunk;
+        flushBuffer(false);
+    };
+
     try {
-        const response = await fetch('/api/ai/chat/stream', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
+        await request.post(
+            '/ai/chat/stream',
+            {
                 messages: [
                     {
                         role: 'user',
-                        content: param.message
-                    }
+                        content: param.message,
+                    },
                 ],
                 usingContext: param.usingContext,
-                history: param.history
-            }),
-            signal: options?.signal
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) {
-            throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            
-            // 处理SSE格式的消息
-            const messages = buffer.split('\n\n');
-            buffer = messages.pop() || '';
-
-            for (const message of messages) {
-                if (!message.startsWith('data:')) continue;
-
-                const data = message.slice(5).trim();
-                if (data === '[DONE]') {
-                    onDone();
-                    return;
-                }
-
-                try {
-                    const parsed = JSON.parse(data);
-                    if (parsed.type === 'error') {
-                        onError(parsed.message);
-                        return;
-                    } else if (parsed.content) {
-                        onData(parsed.content);
-                    }
-                } catch (e) {
-                    console.error('Error parsing SSE message:', e);
-                }
+                history: param.history,
+            },
+            {
+                signal: options?.signal,
+                responseType: 'text',
+                transformResponse: [(data) => data],
+                onDownloadProgress: handleProgress,
             }
-        }
+        );
 
-        // 处理最后的buffer
-        if (buffer.startsWith('data:')) {
-            const data = buffer.slice(5).trim();
-            if (data === '[DONE]') {
+        if (!hasCompleted) {
+            flushBuffer(true);
+            if (!hasCompleted) {
+                hasCompleted = true;
                 onDone();
-            } else {
-                try {
-                    const parsed = JSON.parse(data);
-                    if (parsed.type === 'error') {
-                        onError(parsed.message);
-                    } else if (parsed.content) {
-                        onData(parsed.content);
-                    }
-                } catch (e) {
-                    console.error('Error parsing final SSE message:', e);
-                }
             }
         }
     } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (error instanceof CanceledError) {
             onError('请求已取消');
             throw error;
         }
