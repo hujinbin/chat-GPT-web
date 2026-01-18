@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 // import "antd/dist/antd.css";
 import AntdContainer from '@/components/AntdContainer'
@@ -18,6 +19,15 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <Script
+          id="adsense-init"
+          async
+          strategy="afterInteractive"
+          data-ad-client="ca-pub-7979174285252748"
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"
+        />
+      </head>
       <body className={inter.className}>
         <AntdContainer>{children}</AntdContainer>
       </body>
