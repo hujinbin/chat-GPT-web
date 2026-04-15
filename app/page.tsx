@@ -14,7 +14,8 @@ import {
   Spin,
   Avatar,
   message,
-  Empty
+  Empty,
+  Select
 } from 'antd';
 import {
   SendOutlined,
@@ -26,7 +27,7 @@ import {
 } from '@ant-design/icons';
 import HeaderComponent from '@/components/HeaderComponent';
 import Sider from '@/components/Sider';
-import { chatCompletionStream } from '@/api/index';
+import { chatCompletionStream, MODEL_OPTIONS } from '@/api/index';
 
 const { Content, Header, Footer } = Layout;
 const { TextArea } = Input;
@@ -69,6 +70,7 @@ const ChatApp = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('moonshot-v1-8k');
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const closeMessageRef = useRef<(() => void) | null>(null);
@@ -291,7 +293,8 @@ const ChatApp = () => {
         {
           message: userText,
           usingContext,
-          history: historyPayload
+          history: historyPayload,
+          model: selectedModel
         },
         chunk => {
           closeMessageRef.current?.();
@@ -346,7 +349,7 @@ const ChatApp = () => {
         setIsStreaming(false);
       }
     }
-  }, [appendMessages, currentSession, inputValue, isStreaming, scrollToBottom, stopStreaming, updateMessage, usingContext]);
+  }, [appendMessages, currentSession, inputValue, isStreaming, scrollToBottom, stopStreaming, updateMessage, usingContext, selectedModel]);
 
   const handleCancelStreaming = useCallback(() => {
     if (!currentSession || !isStreaming || !streamingAbortRef.current) {
@@ -411,7 +414,7 @@ const ChatApp = () => {
             </div>
             <div>
               <div className="text-lg font-semibold text-gray-900">AI 聊天助手</div>
-              <div className="text-xs text-gray-500">GPT 驱动的智能对话</div>
+              <div className="text-xs text-gray-500">多模型智能对话</div>
             </div>
           </div>
           <HeaderComponent
@@ -491,13 +494,24 @@ const ChatApp = () => {
                   style={{ borderRadius: 12 }}
                 />
                 <div className={`mt-3 flex ${isMobile ? 'flex-col gap-2' : 'items-center justify-between'}`}>
-                  <Button
-                    type="text"
-                    onClick={() => setUsingContext(prev => !prev)}
-                    className={isMobile ? 'w-full text-left' : ''}
-                  >
-                    上下文 {usingContext ? '已开启' : '已关闭'}
-                  </Button>
+                  <div className={`flex items-center gap-2 ${isMobile ? 'w-full' : ''}`}>
+                    <Select
+                      value={selectedModel}
+                      onChange={setSelectedModel}
+                      className={isMobile ? 'flex-1' : 'min-w-[180px]'}
+                      size="small"
+                      options={MODEL_OPTIONS.flatMap(group => [
+                        { label: `── ${group.label} ──`, options: group.models.map(m => ({ label: m, value: m })) }
+                      ])}
+                    />
+                    <Button
+                      type="text"
+                      size="small"
+                      onClick={() => setUsingContext(prev => !prev)}
+                    >
+                      上下文 {usingContext ? '开' : '关'}
+                    </Button>
+                  </div>
                   <Space
                     wrap
                     size={isMobile ? 8 : 12}

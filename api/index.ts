@@ -2,6 +2,22 @@ import request from '../utils/request';
 import type { AxiosProgressEvent } from 'axios';
 import { CanceledError } from 'axios';
 
+// 支持的模型列表
+export interface ModelOption {
+    key: string;
+    label: string;
+    models: string[];
+    defaultModel: string;
+}
+
+export const MODEL_OPTIONS: ModelOption[] = [
+    { key: 'moonshot', label: 'Moonshot', models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'], defaultModel: 'moonshot-v1-8k' },
+    { key: 'zhipu', label: 'ZhiPu', models: ['glm-4', 'glm-4-flash', 'glm-4-plus'], defaultModel: 'glm-4-flash' },
+    { key: 'qwen', label: 'Qwen', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'], defaultModel: 'qwen-turbo' },
+    { key: 'deepseek', label: 'DeepSeek', models: ['deepseek-chat', 'deepseek-reasoner'], defaultModel: 'deepseek-chat' },
+    { key: 'minmax', label: 'MinMax', models: ['abab6.5s-chat', 'abab6.5-chat', 'abab6.5g-chat'], defaultModel: 'abab6.5s-chat' },
+];
+
 // Chat Completion
 export const chatCompletion = (param: any) => {
     return request({
@@ -11,7 +27,7 @@ export const chatCompletion = (param: any) => {
     });
 };
 
-// Streaming Chat Completion
+// Streaming Chat Completion（支持模型选择）
 export const chatCompletionStream = async (
     param: any,
     onData: (data: string) => void,
@@ -45,16 +61,28 @@ export const chatCompletionStream = async (
 
             try {
                 const parsed = JSON.parse(data);
+
+                // 兼容两种格式：
+                // 1. 自定义格式: { type: "error", message: "..." } 或 { content: "..." }
+                // 2. OpenAI 标准格式: { choices: [{ delta: { content: "..." } }] }
                 if (parsed.type === 'error') {
                     onError(parsed.message);
                     hasCompleted = true;
                     return;
                 }
-                if (parsed.content) {
+
+                // OpenAI 标准流式格式
+                if (parsed.choices && parsed.choices.length > 0) {
+                    const delta = parsed.choices[0].delta;
+                    if (delta && delta.content) {
+                        onData(delta.content);
+                    }
+                } else if (parsed.content) {
+                    // 兼容旧格式
                     onData(parsed.content);
                 }
             } catch (e) {
-                console.error('Error parsing SSE message:', e);
+                // 忽略解析错误（可能是 connect 事件等非JSON数据）
             }
         }
 
@@ -77,18 +105,19 @@ export const chatCompletionStream = async (
         flushBuffer(false);
     };
 
+    // 构建消息列表
+    const messages = [];
+    if (param.history && param.usingContext) {
+        messages.push(...param.history);
+    }
+    messages.push({ role: 'user', content: param.message });
+
     try {
         await request.post(
             '/ai/chat/stream',
             {
-                messages: [
-                    {
-                        role: 'user',
-                        content: param.message,
-                    },
-                ],
-                usingContext: param.usingContext,
-                history: param.history,
+                messages,
+                model: param.model || 'moonshot-v1-8k',
             },
             {
                 signal: options?.signal,
@@ -124,4 +153,3 @@ export const fileExtraction = (param: any) => {
         data: param,
     });
 };
-
