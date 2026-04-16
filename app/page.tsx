@@ -27,7 +27,7 @@ import {
 } from '@ant-design/icons';
 import HeaderComponent from '@/components/HeaderComponent';
 import Sider from '@/components/Sider';
-import { chatCompletionStream, MODEL_OPTIONS } from '@/api/index';
+import { chatCompletionStream, fetchModelOptions, ModelOption } from '@/api/index';
 
 const { Content, Header, Footer } = Layout;
 const { TextArea } = Input;
@@ -70,7 +70,8 @@ const ChatApp = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('moonshot-v1-8k');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const closeMessageRef = useRef<(() => void) | null>(null);
@@ -83,6 +84,16 @@ const ChatApp = () => {
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // 从后端加载模型列表
+  useEffect(() => {
+    fetchModelOptions().then(groups => {
+      setModelOptions(groups);
+      if (groups.length > 0 && groups[0].default_model) {
+        setSelectedModel(prev => prev || groups[0].default_model);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -496,11 +507,12 @@ const ChatApp = () => {
                 <div className={`mt-3 flex ${isMobile ? 'flex-col gap-2' : 'items-center justify-between'}`}>
                   <div className={`flex items-center gap-2 ${isMobile ? 'w-full' : ''}`}>
                     <Select
-                      value={selectedModel}
+                      value={selectedModel || undefined}
                       onChange={setSelectedModel}
                       className={isMobile ? 'flex-1' : 'min-w-[180px]'}
                       size="small"
-                      options={MODEL_OPTIONS.flatMap(group => [
+                      placeholder="选择模型"
+                      options={modelOptions.flatMap(group => [
                         { label: `── ${group.label} ──`, options: group.models.map(m => ({ label: m, value: m })) }
                       ])}
                     />
