@@ -1,4 +1,5 @@
 import axios, {
+    AxiosHeaders,
     AxiosInstance,
     AxiosError,
     AxiosRequestConfig,
@@ -6,7 +7,7 @@ import axios, {
     InternalAxiosRequestConfig,
 } from 'axios';
 
-const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
+const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? 'https://monitor.leheavengame.com';
 const REQUEST_TIMEOUT = 15_000;
 
 const service: AxiosInstance = axios.create({
@@ -16,12 +17,10 @@ const service: AxiosInstance = axios.create({
 
 service.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
-        if (!config.headers) {
-            config.headers = {};
-        }
+        config.headers = config.headers ?? new AxiosHeaders();
 
-        if (!config.headers['Content-Type'] && !(config.data instanceof FormData)) {
-            config.headers['Content-Type'] = 'application/json';
+        if (!config.headers.has('Content-Type') && !(config.data instanceof FormData)) {
+            config.headers.set('Content-Type', 'application/json');
         }
 
         return config;

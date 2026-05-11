@@ -11,7 +11,7 @@ export interface ModelOption {
 // 从后端获取可用模型列表
 export const fetchModelOptions = async (): Promise<ModelOption[]> => {
     try {
-        const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
+        const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? 'https://monitor.leheavengame.com';
         const res = await fetch(`${baseURL}/ai/models`);
         const json = await res.json();
         if (json.code === 200 && Array.isArray(json.data)) {
@@ -53,7 +53,7 @@ export const chatCompletionStream = async (
     onDone: () => void,
     options?: { signal?: AbortSignal }
 ) => {
-    const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
+    const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? 'https://monitor.leheavengame.com';
     const url = `${baseURL}/ai/chat/stream`;
 
     // 构建消息列表
