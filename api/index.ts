@@ -1,3 +1,4 @@
+import { API_BASE_URL } from '../utils/request';
 import request from '../utils/request';
 
 // 模型分组（从后端获取）
@@ -11,8 +12,7 @@ export interface ModelOption {
 // 从后端获取可用模型列表
 export const fetchModelOptions = async (): Promise<ModelOption[]> => {
     try {
-        const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? 'https://monitor.leheavengame.com';
-        const res = await fetch(`${baseURL}/ai/models`);
+        const res = await fetch(`${API_BASE_URL}/ai/models`);
         const json = await res.json();
         if (json.code === 200 && Array.isArray(json.data)) {
             return json.data;
@@ -53,8 +53,7 @@ export const chatCompletionStream = async (
     onDone: () => void,
     options?: { signal?: AbortSignal }
 ) => {
-    const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? 'https://monitor.leheavengame.com';
-    const url = `${baseURL}/ai/chat/stream`;
+    const url = `${API_BASE_URL}/ai/chat/stream`;
 
     // 构建消息列表
     const messages: Array<{ role: string; content: string }> = [];

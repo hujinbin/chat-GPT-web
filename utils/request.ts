@@ -1,3 +1,6 @@
+// 统一 API 基础地址（正式环境由 nginx 将 /api 代理到后端）
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE ?? '/api';
+
 import axios, {
     AxiosHeaders,
     AxiosInstance,
@@ -7,11 +10,10 @@ import axios, {
     InternalAxiosRequestConfig,
 } from 'axios';
 
-const baseURL = process.env.NEXT_PUBLIC_API_BASE ?? 'https://monitor.leheavengame.com';
 const REQUEST_TIMEOUT = 15_000;
 
 const service: AxiosInstance = axios.create({
-    baseURL,
+    baseURL: API_BASE_URL,
     timeout: REQUEST_TIMEOUT,
 });
 
