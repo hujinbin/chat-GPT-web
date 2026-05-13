@@ -13,7 +13,7 @@ import {
 const { Sider: AntdSider } = Layout;
 const { Search } = Input;
 
-interface ChatSummary {
+export interface ChatSummary {
   id: string;
   title: string;
   subtitle: string;

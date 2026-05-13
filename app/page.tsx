@@ -105,7 +105,7 @@ const ChatApp = () => {
     [chatSessions, currentChatId]
   );
 
-  const messages = currentSession?.messages ?? [];
+  const messages = useMemo(() => currentSession?.messages ?? [], [currentSession]);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
