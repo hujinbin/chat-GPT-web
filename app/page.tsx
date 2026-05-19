@@ -28,6 +28,7 @@ import {
 import HeaderComponent from '@/components/HeaderComponent';
 import Sider from '@/components/Sider';
 import { chatCompletionStream, fetchModelOptions, ModelOption } from '@/api/index';
+import styles from './page.module.less';
 
 const { Content, Header, Footer } = Layout;
 const { TextArea } = Input;
@@ -50,6 +51,11 @@ interface ChatSession {
   messages: ChatMessage[];
 }
 
+interface AnimatedMessageTextProps {
+  content: string;
+  loading?: boolean;
+}
+
 const formatTime = (iso: string) => {
   const date = new Date(iso);
   const now = new Date();
@@ -60,6 +66,63 @@ const formatTime = (iso: string) => {
   return sameDay
     ? date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
     : date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+};
+
+const AnimatedMessageText = ({ content, loading = false }: AnimatedMessageTextProps) => {
+  const [displayedContent, setDisplayedContent] = useState(() =>
+    loading ? '' : content
+  );
+  const frameRef = useRef<number | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const shouldAnimateRef = useRef(loading || !content);
+
+  useEffect(() => {
+    if (!shouldAnimateRef.current) {
+      setDisplayedContent(content);
+      return;
+    }
+
+    if (displayedContent.length > content.length) {
+      setDisplayedContent(content);
+      return;
+    }
+
+    if (displayedContent === content) {
+      return;
+    }
+
+    const tick = () => {
+      setDisplayedContent(prev => {
+        if (prev.length >= content.length) {
+          return prev;
+        }
+
+        const nextLength = Math.min(content.length, prev.length + 2);
+        return content.slice(0, nextLength);
+      });
+      timeoutRef.current = window.setTimeout(() => {
+        frameRef.current = requestAnimationFrame(tick);
+      }, 18);
+    };
+
+    frameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+      }
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    };
+  }, [content, displayedContent, loading]);
+
+  return (
+    <span className="whitespace-pre-wrap">
+      {displayedContent}
+      {loading && <span className={styles.typingCursor} aria-hidden="true" />}
+    </span>
+  );
 };
 
 const ChatApp = () => {
@@ -105,7 +168,10 @@ const ChatApp = () => {
     [chatSessions, currentChatId]
   );
 
-  const messages = currentSession?.messages ?? [];
+  const messages = useMemo(
+    () => currentSession?.messages ?? [],
+    [currentSession]
+  );
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -484,6 +550,11 @@ const ChatApp = () => {
                                 </Space>
                               ) : messageItem.error ? (
                                 <span className="text-red-500">{messageItem.content}</span>
+                              ) : !isUser ? (
+                                <AnimatedMessageText
+                                  content={messageItem.content}
+                                  loading={messageItem.loading}
+                                />
                               ) : (
                                 <span className="whitespace-pre-wrap">{messageItem.content}</span>
                               )}
