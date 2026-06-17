@@ -54,6 +54,7 @@ interface ChatSession {
 interface AnimatedMessageTextProps {
   content: string;
   loading?: boolean;
+  onTick?: () => void;
 }
 
 const formatTime = (iso: string) => {
@@ -68,15 +69,46 @@ const formatTime = (iso: string) => {
     : date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
 };
 
-const AnimatedMessageText = ({ content, loading = false }: AnimatedMessageTextProps) => {
+const AppLoading = () => (
+  <div className={styles.appLoading}>
+    <div className={styles.loadingPanel}>
+      <div className={styles.loadingLogo}>
+        <ApiOutlined />
+      </div>
+      <div>
+        <div className={styles.loadingTitle}>AI 聊天助手</div>
+        <div className={styles.loadingText}>正在准备对话环境...</div>
+      </div>
+      <div className={styles.loadingDots} aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+    </div>
+  </div>
+);
+
+const ThinkingDots = () => (
+  <span className={styles.thinkingDots} aria-label="正在思考">
+    <span />
+    <span />
+    <span />
+  </span>
+);
+
+const AnimatedMessageText = ({ content, loading = false, onTick }: AnimatedMessageTextProps) => {
   const [displayedContent, setDisplayedContent] = useState(() =>
-    loading ? '' : content
+    loading || !content ? '' : content
   );
   const frameRef = useRef<number | null>(null);
   const timeoutRef = useRef<number | null>(null);
   const shouldAnimateRef = useRef(loading || !content);
 
   useEffect(() => {
+    if (loading) {
+      shouldAnimateRef.current = true;
+    }
+
     if (!shouldAnimateRef.current) {
       setDisplayedContent(content);
       return;
@@ -97,12 +129,12 @@ const AnimatedMessageText = ({ content, loading = false }: AnimatedMessageTextPr
           return prev;
         }
 
-        const nextLength = Math.min(content.length, prev.length + 2);
+        const nextLength = Math.min(content.length, prev.length + 1);
         return content.slice(0, nextLength);
       });
       timeoutRef.current = window.setTimeout(() => {
         frameRef.current = requestAnimationFrame(tick);
-      }, 18);
+      }, 22);
     };
 
     frameRef.current = requestAnimationFrame(tick);
@@ -117,10 +149,16 @@ const AnimatedMessageText = ({ content, loading = false }: AnimatedMessageTextPr
     };
   }, [content, displayedContent, loading]);
 
+  useEffect(() => {
+    onTick?.();
+  }, [displayedContent, onTick]);
+
+  const isCatchingUp = displayedContent.length < content.length;
+
   return (
     <span className="whitespace-pre-wrap">
       {displayedContent}
-      {loading && <span className={styles.typingCursor} aria-hidden="true" />}
+      {(loading || isCatchingUp) && <span className={styles.typingCursor} aria-hidden="true" />}
     </span>
   );
 };
@@ -131,6 +169,7 @@ const ChatApp = () => {
   const [inputValue, setInputValue] = useState('');
   const [usingContext, setUsingContext] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isAppReady, setIsAppReady] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isSiderCollapsed, setIsSiderCollapsed] = useState(false);
   const [selectedModel, setSelectedModel] = useState('');
@@ -138,6 +177,7 @@ const ChatApp = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const closeMessageRef = useRef<(() => void) | null>(null);
+  const hasBootstrappedRef = useRef(false);
 
   useEffect(() => {
     const handleResize = () => {
@@ -213,10 +253,12 @@ const ChatApp = () => {
   }, []);
 
   useEffect(() => {
-    if (!chatSessions.length) {
+    if (!hasBootstrappedRef.current) {
+      hasBootstrappedRef.current = true;
       handleCreateChat();
+      setIsAppReady(true);
     }
-  }, [chatSessions.length, handleCreateChat]);
+  }, [handleCreateChat]);
 
   useEffect(() => {
     scrollToBottom();
@@ -379,7 +421,7 @@ const ChatApp = () => {
           updateMessage(chatId, assistantId, msg => ({
             ...msg,
             content: `${msg.content}${chunk}`,
-            loading: false,
+            loading: true,
             error: false
           }));
           scrollToBottom();
@@ -459,6 +501,10 @@ const ChatApp = () => {
       }),
     [chatSessions]
   );
+
+  if (!isAppReady) {
+    return <AppLoading />;
+  }
 
   return (
     <Layout className="h-screen bg-[#f3f5f9]">
@@ -543,18 +589,22 @@ const ChatApp = () => {
                                   : 'rounded-3xl rounded-tl-md bg-white text-gray-900 shadow'
                               } ${isMobile ? 'px-4 py-2' : 'px-5 py-3'} text-sm leading-6`}
                             >
-                              {messageItem.loading ? (
-                                <Space align="center">
-                                  <Spin indicator={<LoadingOutlined spin />} size="small" />
-                                  <span>正在思考...</span>
-                                </Space>
-                              ) : messageItem.error ? (
+                              {messageItem.error ? (
                                 <span className="text-red-500">{messageItem.content}</span>
                               ) : !isUser ? (
-                                <AnimatedMessageText
-                                  content={messageItem.content}
-                                  loading={messageItem.loading}
-                                />
+                                messageItem.content ? (
+                                  <AnimatedMessageText
+                                    content={messageItem.content}
+                                    loading={messageItem.loading}
+                                    onTick={scrollToBottom}
+                                  />
+                                ) : (
+                                  <Space align="center">
+                                    <Spin indicator={<LoadingOutlined spin />} size="small" />
+                                    <span className="text-gray-500">正在思考</span>
+                                    <ThinkingDots />
+                                  </Space>
+                                )
                               ) : (
                                 <span className="whitespace-pre-wrap">{messageItem.content}</span>
                               )}
