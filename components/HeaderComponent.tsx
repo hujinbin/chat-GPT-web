@@ -31,10 +31,10 @@ export default function HeaderComponent({
         </Button>
       </Tooltip>
       
-      <Tooltip title={usingContext ? '关闭上下文' : '开启上下文'}>
+      <Tooltip title={usingContext ? '已开启上下文记忆，点击关闭' : '已关闭上下文记忆，点击开启'}>
         <Space size="small" align="center">
           <SettingOutlined className="text-gray-600" />
-          {!isMobile && <span className="text-sm text-gray-700">上下文</span>}
+          {!isMobile && <span className="text-sm text-gray-700">上下文记忆</span>}
           <Switch 
             checked={usingContext} 
             onChange={onToggleUsingContext}

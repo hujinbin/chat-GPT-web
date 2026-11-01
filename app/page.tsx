@@ -15,7 +15,9 @@ import {
   Avatar,
   message,
   Empty,
-  Select
+  Select,
+  Switch,
+  Tooltip
 } from 'antd';
 import {
   SendOutlined,
@@ -23,11 +25,19 @@ import {
   CloseOutlined,
   ApiOutlined,
   UserOutlined,
-  MenuOutlined
+  MenuOutlined,
+  LinkOutlined,
+  GlobalOutlined
 } from '@ant-design/icons';
 import HeaderComponent from '@/components/HeaderComponent';
 import Sider from '@/components/Sider';
-import { chatCompletionStream, fetchModelOptions, ModelOption } from '@/api/index';
+import {
+  chatCompletionStream,
+  fetchModelOptions,
+  ModelOption,
+  SearchSource,
+  DEFAULT_MODEL
+} from '@/api/index';
 import styles from './page.module.less';
 
 const { Content, Header, Footer } = Layout;
@@ -40,6 +50,9 @@ interface ChatMessage {
   createdAt: string;
   error?: boolean;
   loading?: boolean;
+  sources?: SearchSource[];
+  // 当前处理阶段提示，如"正在联网检索…"
+  stage?: string;
 }
 
 interface ChatSession {
@@ -168,6 +181,7 @@ const ChatApp = () => {
   const [currentChatId, setCurrentChatId] = useState('');
   const [inputValue, setInputValue] = useState('');
   const [usingContext, setUsingContext] = useState(true);
+  const [searchEnabled, setSearchEnabled] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isAppReady, setIsAppReady] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -193,9 +207,7 @@ const ChatApp = () => {
   useEffect(() => {
     fetchModelOptions().then(groups => {
       setModelOptions(groups);
-      if (groups.length > 0 && groups[0].default_model) {
-        setSelectedModel(prev => prev || groups[0].default_model);
-      }
+      setSelectedModel(prev => prev || groups[0]?.default_model || DEFAULT_MODEL);
     });
   }, []);
 
@@ -233,7 +245,7 @@ const ChatApp = () => {
     const welcomeMessage: ChatMessage = {
       id: `${id}-welcome`,
       role: 'assistant',
-      content: '你好！我是AI助手，有什么可以帮助你的吗？',
+      content: '你好，我是 AI 助手。直接提问即可，我会先联网检索最新资料，再结合资料给出回答。',
       createdAt: now
     };
 
@@ -391,7 +403,7 @@ const ChatApp = () => {
       loading: true
     };
     const historyPayload = usingContext
-      ? [...currentSession.messages, userMessage].map(item => ({
+      ? currentSession.messages.map(item => ({
           role: item.role,
           content: item.content
         }))
@@ -401,7 +413,7 @@ const ChatApp = () => {
     setInputValue('');
     setIsStreaming(true);
 
-    const hideSending = message.loading('AI 正在回复...', 0);
+    const hideSending = message.loading('正在思考，请稍候…', 0);
     closeMessageRef.current = hideSending;
 
     const controller = new AbortController();
@@ -412,6 +424,7 @@ const ChatApp = () => {
         {
           message: userText,
           usingContext,
+          search: searchEnabled,
           history: historyPayload,
           model: selectedModel
         },
@@ -422,8 +435,24 @@ const ChatApp = () => {
             ...msg,
             content: `${msg.content}${chunk}`,
             loading: true,
-            error: false
+            error: false,
+            stage: undefined
           }));
+          scrollToBottom();
+        },
+        sources => {
+          // 联网搜索来源实时到达，按 url + title 去重后追加
+          closeMessageRef.current?.();
+          closeMessageRef.current = null;
+          updateMessage(chatId, assistantId, msg => {
+            const merged = [...(msg.sources ?? [])];
+            for (const source of sources) {
+              if (!merged.some(item => item.url === source.url && item.title === source.title)) {
+                merged.push(source);
+              }
+            }
+            return { ...msg, sources: merged };
+          });
           scrollToBottom();
         },
         error => {
@@ -447,11 +476,21 @@ const ChatApp = () => {
           setIsStreaming(false);
           updateMessage(chatId, assistantId, msg => ({
             ...msg,
-            loading: false
+            loading: false,
+            stage: undefined
           }));
           scrollToBottom();
         },
-        { signal: controller.signal }
+        {
+          signal: controller.signal,
+          onStage: (_stage, text) => {
+            // 后端会先检索再回答，这里实时展示当前进度
+            closeMessageRef.current?.();
+            closeMessageRef.current = null;
+            updateMessage(chatId, assistantId, msg => ({ ...msg, stage: text }));
+            scrollToBottom();
+          }
+        }
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -468,7 +507,7 @@ const ChatApp = () => {
         setIsStreaming(false);
       }
     }
-  }, [appendMessages, currentSession, inputValue, isStreaming, scrollToBottom, stopStreaming, updateMessage, usingContext, selectedModel]);
+  }, [appendMessages, currentSession, inputValue, isStreaming, scrollToBottom, stopStreaming, updateMessage, usingContext, searchEnabled, selectedModel]);
 
   const handleCancelStreaming = useCallback(() => {
     if (!currentSession || !isStreaming || !streamingAbortRef.current) {
@@ -589,6 +628,28 @@ const ChatApp = () => {
                                   : 'rounded-3xl rounded-tl-md bg-white text-gray-900 shadow'
                               } ${isMobile ? 'px-4 py-2' : 'px-5 py-3'} text-sm leading-6`}
                             >
+                              {!isUser && messageItem.sources && messageItem.sources.length > 0 && (
+                                <div className="mb-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+                                  <div className="mb-1 flex items-center gap-1 text-xs font-medium text-gray-600">
+                                    <LinkOutlined />
+                                    联网搜索来源（{messageItem.sources.length}）
+                                  </div>
+                                  <div className="flex flex-col gap-1">
+                                    {messageItem.sources.map((source, index) => (
+                                      <a
+                                        key={`${source.url}-${index}`}
+                                        href={source.url || undefined}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        title={source.snippet || source.title}
+                                        className="block truncate text-xs text-green-600 hover:underline"
+                                      >
+                                        {index + 1}. {source.title}
+                                      </a>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                               {messageItem.error ? (
                                 <span className="text-red-500">{messageItem.content}</span>
                               ) : !isUser ? (
@@ -601,7 +662,9 @@ const ChatApp = () => {
                                 ) : (
                                   <Space align="center">
                                     <Spin indicator={<LoadingOutlined spin />} size="small" />
-                                    <span className="text-gray-500">正在思考</span>
+                                    <span className="text-gray-500">
+                                      {messageItem.stage || (searchEnabled ? '正在检索并整理资料…' : '正在思考')}
+                                    </span>
                                     <ThinkingDots />
                                   </Space>
                                 )
@@ -621,7 +684,7 @@ const ChatApp = () => {
                   value={inputValue}
                   onChange={event => setInputValue(event.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="来说点什么吧… (Shift + Enter 换行，Enter 发送)"
+                  placeholder="输入你的问题，Enter 发送，Shift + Enter 换行"
                   autoSize={{ minRows: 1, maxRows: isMobile ? 3 : 5 }}
                   style={{ borderRadius: 12 }}
                 />
@@ -637,13 +700,27 @@ const ChatApp = () => {
                         { label: `── ${group.label} ──`, options: group.models.map(m => ({ label: m, value: m })) }
                       ])}
                     />
-                    <Button
-                      type="text"
-                      size="small"
-                      onClick={() => setUsingContext(prev => !prev)}
-                    >
-                      上下文 {usingContext ? '开' : '关'}
-                    </Button>
+                    <Tooltip title="开启后，回答前会先联网检索最新资料">
+                      <Space size={4} align="center">
+                        <GlobalOutlined className="text-gray-500" />
+                        <span className="text-xs text-gray-600">联网搜索</span>
+                        <Switch
+                          size="small"
+                          checked={searchEnabled}
+                          onChange={setSearchEnabled}
+                        />
+                      </Space>
+                    </Tooltip>
+                    <Tooltip title="开启后，本轮对话会带入历史消息进行追问">
+                      <Space size={4} align="center">
+                        <span className="text-xs text-gray-600">上下文记忆</span>
+                        <Switch
+                          size="small"
+                          checked={usingContext}
+                          onChange={setUsingContext}
+                        />
+                      </Space>
+                    </Tooltip>
                   </div>
                   <Space
                     wrap
