@@ -1,3 +1,4 @@
+import { chatContent, ChatHistoryMessage, ImageAttachment } from './attachments';
 import { API_BASE_URL } from '../utils/request';
 import request from '../utils/request';
 
@@ -107,146 +108,187 @@ export const chatCompletionStream = async (
         message: string;
         usingContext?: boolean;
         search?: boolean;
-        history?: Array<{ role: string; content: string }>;
+        history?: ChatHistoryMessage[];
+        images?: ImageAttachment[];
         model?: string;
     },
     onData: (content: string) => void,
     onSearch: (sources: SearchSource[]) => void,
     onError: (error: string) => void,
     onDone: () => void,
-    options?: { signal?: AbortSignal; onStage?: (stage: string, message: string) => void }
+    options?: {
+        signal?: AbortSignal;
+        onStage?: (stage: string, message: string, metadata?: Record<string, unknown>) => void;
+    }
 ) => {
-    const url = `${API_BASE_URL}/ai/chat/stream`;
+    const messages = param.usingContext ? [...(param.history || [])] : [];
+    messages.push({ role: 'user', content: chatContent(param.message, param.images) });
 
-    // 构建消息列表
-    const messages: Array<{ role: string; content: string }> = [];
-    if (param.history && param.usingContext) {
-        messages.push(...param.history);
-    }
-    messages.push({ role: 'user', content: param.message });
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let completed = false;
+    let reachedEOF = false;
+    let callbackFailed = false;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            messages,
-            model: param.model || DEFAULT_MODEL,
-            search: param.search !== false,
-        }),
-        signal: options?.signal,
-    });
-
-    if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        onError(text || `请求失败 (${response.status})`);
-        return;
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-        onError('无法获取响应流');
-        return;
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentEvent = '';
-    let hasCompleted = false;
-
-    const processSSEEvents = () => {
-        // SSE 以 \n\n 分隔事件
-        const parts = buffer.split('\n\n');
-        // 最后一段可能不完整，保留在 buffer 中
-        buffer = parts.pop() || '';
-
-        for (const part of parts) {
-            if (!part.trim()) continue;
-
-            let eventType = '';
-            let dataStr = '';
-
-            for (const line of part.split('\n')) {
-                if (line.startsWith('event:')) {
-                    eventType = line.slice(6).trim();
-                } else if (line.startsWith('data:')) {
-                    dataStr = line.slice(5).trim();
-                }
-            }
-
-            if (!eventType && !dataStr) continue;
-
-            // 如果没有 event 字段，使用上一次的 currentEvent
-            if (eventType) {
-                currentEvent = eventType;
-            }
-
-            try {
-                const data = dataStr ? JSON.parse(dataStr) : {};
-
-                switch (currentEvent) {
-                    case 'connect':
-                        // 连接成功，不需要特别处理
-                        break;
-                    case 'stage':
-                        // 处理阶段提示（如"正在联网检索…"）
-                        if (data.message && options?.onStage) {
-                            options.onStage(String(data.stage || ''), String(data.message));
-                        }
-                        break;
-                    case 'message':
-                        if (data.content) {
-                            onData(data.content);
-                        }
-                        break;
-                    case 'search': {
-                        // 联网搜索来源，按片段实时下发
-                        const sources = extractSearchSources(data);
-                        if (sources.length) {
-                            onSearch(sources);
-                        }
-                        break;
-                    }
-                    case 'error':
-                        onError(data.message || '未知错误');
-                        hasCompleted = true;
-                        return;
-                    case 'done':
-                        hasCompleted = true;
-                        onDone();
-                        return;
-                }
-            } catch {
-                // 忽略JSON解析错误
-            }
+    // 回调异常交由调用方处理，避免被当作 JSON 或网络错误后再次触发终止回调。
+    const invoke = (callback: () => void) => {
+        try {
+            callback();
+        } catch (error) {
+            callbackFailed = true;
+            throw error;
         }
+    };
+    const finish = () => {
+        if (completed) return;
+        completed = true;
+        invoke(onDone);
+    };
+    const fail = (message: string) => {
+        if (completed) return;
+        completed = true;
+        invoke(() => onError(message));
     };
 
     try {
-        while (true) {
+        const response = await fetch(`${API_BASE_URL}/ai/chat/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages, model: param.model || DEFAULT_MODEL, search: param.search !== false }),
+            signal: options?.signal,
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            let message = `请求失败 (${response.status})`;
+            try {
+                const error = JSON.parse(text);
+                message = error.msg || error.message || error.error?.message || message;
+            } catch {
+                // 非 JSON 错误页仅显示状态，避免把代理服务器 HTML 当成回复。
+            }
+            fail(message);
+            return;
+        }
+        if (!response.headers.get('Content-Type')?.includes('text/event-stream')) {
+            fail('服务器未返回流式响应，请检查 AI 接口与反向代理配置');
+            return;
+        }
+        reader = response.body?.getReader();
+        if (!reader) {
+            fail('无法获取响应流');
+            return;
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let eventName = '';
+        let dataLines: string[] = [];
+
+        const dispatch = () => {
+            const name = eventName || 'message';
+            const text = dataLines.join('\n');
+            // SSE 的 event 字段只对当前事件有效。
+            eventName = '';
+            dataLines = [];
+            if (!text || completed) return;
+            if (text.trim() === '[DONE]') {
+                finish();
+                return;
+            }
+            if (!['stage', 'search', 'message', 'error', 'done'].includes(name)) return;
+            let data: Record<string, any>;
+            try {
+                const parsed = JSON.parse(text);
+                if (!parsed || typeof parsed !== 'object') throw new Error('invalid event');
+                data = parsed;
+            } catch {
+                throw new Error('流式响应数据格式错误，请重试');
+            }
+            if (name === 'error' || data.error) {
+                fail(String(data.message || data.error?.message || (typeof data.error === 'string' ? data.error : 'AI 服务返回错误')));
+                return;
+            }
+            if (name === 'done') {
+                finish();
+                return;
+            }
+            if (name === 'stage') {
+                if (typeof data.message === 'string') {
+                    invoke(() => options?.onStage?.(String(data.stage || ''), data.message, data));
+                }
+                return;
+            }
+            if (name === 'search' || name === 'message') {
+                const sources = extractSearchSources(data);
+                if (sources.length) invoke(() => onSearch(sources));
+            }
+            if (name === 'message') {
+                const choice = Array.isArray(data.choices) ? data.choices[0] : undefined;
+                const content = typeof data.content === 'string' ? data.content : choice?.delta?.content;
+                if (typeof content === 'string' && content) invoke(() => onData(content));
+                if (choice?.finish_reason) finish();
+            }
+        };
+
+        const processLine = (line: string) => {
+            if (!line) {
+                dispatch();
+                return;
+            }
+            if (line.startsWith(':')) return;
+            const colon = line.indexOf(':');
+            const field = colon < 0 ? line : line.slice(0, colon);
+            let value = colon < 0 ? '' : line.slice(colon + 1);
+            if (value.startsWith(' ')) value = value.slice(1);
+            if (field === 'event') eventName = value;
+            if (field === 'data') dataLines.push(value);
+        };
+
+        const processBuffer = (final = false) => {
+            while (!completed) {
+                const index = buffer.search(/[\r\n]/);
+                if (index < 0) break;
+                // 等待下一块，防止将跨块的 CRLF 拆成两个空行。
+                if (buffer[index] === '\r' && index === buffer.length - 1 && !final) break;
+                const line = buffer.slice(0, index);
+                const width = buffer[index] === '\r' && buffer[index + 1] === '\n' ? 2 : 1;
+                buffer = buffer.slice(index + width);
+                processLine(line);
+            }
+            if (final && !completed) {
+                if (buffer) processLine(buffer);
+                buffer = '';
+                dispatch();
+            }
+        };
+
+        while (!completed) {
             const { done, value } = await reader.read();
-            if (done) break;
-
+            if (done) {
+                reachedEOF = true;
+                buffer += decoder.decode();
+                processBuffer(true);
+                break;
+            }
             buffer += decoder.decode(value, { stream: true });
-            processSSEEvents();
-
-            if (hasCompleted) break;
+            processBuffer();
         }
-
-        // 处理 buffer 中剩余的数据
-        if (buffer.trim() && !hasCompleted) {
-            // 确保以 \n\n 结尾来触发最后的事件处理
-            buffer += '\n\n';
-            processSSEEvents();
+        if (!completed) fail('回复连接提前中断，已收到的内容已保留，可重试或继续追问');
+    } catch (error) {
+        if (callbackFailed) throw error;
+        if (options?.signal?.aborted) {
+            throw options.signal.reason || new DOMException('请求已取消', 'AbortError');
         }
-
-        if (!hasCompleted) {
-            onDone();
+        const detail = error as { name?: string; message?: string } | undefined;
+        if (detail?.name === 'AbortError') throw error;
+        fail(typeof detail?.message === 'string' ? detail.message : '连接出错');
+    } finally {
+        if (reader) {
+            if (!reachedEOF) {
+                try { await reader.cancel(); } catch { /* 连接已关闭时仍需释放读取锁。 */ }
+            }
+            reader.releaseLock();
         }
-    } catch (error: any) {
-        if (error?.name === 'AbortError') {
-            throw error; // 让调用方处理取消
-        }
-        onError(error instanceof Error ? error.message : '连接出错');
     }
 };
 

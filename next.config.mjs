@@ -4,7 +4,8 @@ const isDev = process.env.NODE_ENV !== 'production';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-    output: "export",   // 👈 必须加这个
+    // 开发与生产分别使用缓存目录，避免构建时覆盖正在运行的开发服务。
+    distDir: isDev ? '.next-dev' : '.next',
     images: {
         unoptimized: true // 👈 静态打包必须关闭图片优化
     },
@@ -15,12 +16,13 @@ const nextConfig = {
                 return [
                     {
                         source: '/api/:path*',
-                        destination: 'http://localhost:8080/api/:path*',
+                        destination: 'http://127.0.0.1:8080/api/:path*',
                     },
                 ];
             },
         }
-        : {}),
+        // 仅生产构建静态导出，开发模式保留实时路由和接口代理。
+        : { output: 'export' }),
 };
 
 export default withAntdLess(nextConfig);

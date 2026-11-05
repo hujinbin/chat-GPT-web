@@ -9,6 +9,7 @@ import {
   SearchOutlined,
   EditOutlined
 } from '@ant-design/icons';
+import styles from './index.module.less';
 
 const { Sider: AntdSider } = Layout;
 const { Search } = Input;
@@ -111,7 +112,7 @@ const Sider = ({
   };
 
   const renderExpandedContent = () => (
-    <div className="flex h-full flex-col">
+    <div className="relative z-[60] flex h-full flex-col bg-[#fbfbfb]">
       <div className="px-4 pt-5 pb-4 border-b border-gray-200 bg-white">
         <Button
           type="primary"
@@ -150,7 +151,7 @@ const Sider = ({
               return (
                 <div
                   key={chat.id}
-                  className={`group rounded-xl border transition-all duration-200 hover:border-green-400 hover:bg-green-50 cursor-pointer ${
+                  className={`${styles.chatCard} group rounded-xl border transition-all duration-200 hover:border-green-400 hover:bg-green-50 cursor-pointer ${
                     isActive ? 'border-green-400 bg-green-50 shadow-sm' : 'border-transparent bg-white'
                   }`}
                   onClick={() => {
@@ -160,32 +161,34 @@ const Sider = ({
                     }
                   }}
                 >
-                  <div className="flex items-start justify-between px-3 pt-3">
-                    <Space align="center" size={8}>
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-green-100 text-green-600">
+                  <div className={styles.chatHeader}>
+                    <div className={styles.chatIdentity}>
+                      <div className={`${styles.chatAvatar} flex h-8 w-8 items-center justify-center rounded-full bg-green-100 text-green-600`}>
                         <MessageOutlined />
                       </div>
-                      {editingChatId === chat.id ? (
-                        <Input
-                          size="small"
-                          autoFocus
-                          value={editingTitle}
-                          onChange={event => setEditingTitle(event.target.value)}
-                          onPressEnter={finishEditing}
-                          onBlur={finishEditing}
-                        />
-                      ) : (
-                        <div>
-                          <div className="text-sm font-medium text-gray-800">
-                            {chat.title}
+                      <div className={styles.chatDetails}>
+                        {editingChatId === chat.id ? (
+                          <Input
+                            size="small"
+                            autoFocus
+                            value={editingTitle}
+                            onChange={event => setEditingTitle(event.target.value)}
+                            onPressEnter={finishEditing}
+                            onBlur={finishEditing}
+                          />
+                        ) : (
+                          <div>
+                            <div className={`${styles.chatTitle} text-sm font-medium text-gray-800`} title={chat.title}>
+                              {chat.title}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1 truncate">
+                              {chat.subtitle}
+                            </div>
                           </div>
-                          <div className="text-xs text-gray-500 mt-1 max-w-[180px] truncate">
-                            {chat.subtitle}
-                          </div>
-                        </div>
-                      )}
-                    </Space>
-                    <Space size={4}>
+                        )}
+                      </div>
+                    </div>
+                    <Space size={4} className={styles.chatActions}>
                       <Tooltip title={chat.isStarred ? '取消收藏' : '收藏此会话'}>
                         <Button
                           type="text"
@@ -230,16 +233,10 @@ const Sider = ({
                     </Space>
                   </div>
                   {chat.lastMessage && (
-                    <div
-                      className="px-3 pb-3 pt-1 text-xs text-gray-500"
-                      style={{
-                        display: '-webkit-box',
-                        WebkitBoxOrient: 'vertical',
-                        WebkitLineClamp: 2,
-                        overflow: 'hidden'
-                      }}
-                    >
-                      {chat.lastMessage}
+                    <div className={styles.chatPreview}>
+                      <div className={styles.chatPreviewText}>
+                        {chat.lastMessage}
+                      </div>
                     </div>
                   )}
                 </div>
