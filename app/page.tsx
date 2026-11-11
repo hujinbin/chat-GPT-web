@@ -30,7 +30,8 @@ import {
   GlobalOutlined
 } from '@ant-design/icons';
 import ImageComposer from '@/components/ImageComposer';
-import { ImageAttachment, readImage, imageBytes, chatContent, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES } from '@/api/attachments';
+import { ChatHistoryMessage, ImageAttachment, readImage, imageBytes, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BYTES } from '@/api/attachments';
+import { conversationRequest } from '@/api/conversation';
 import HeaderComponent from '@/components/HeaderComponent';
 import Sider from '@/components/Sider';
 import {
@@ -59,6 +60,7 @@ interface ChatMessage {
   stopped?: boolean;
   guidance?: boolean;
   quote?: string;
+  references?: ChatHistoryMessage[];
   images?: ImageAttachment[];
   process?: ProcessStep[];
   loading?: boolean;
@@ -84,6 +86,7 @@ interface ActiveRequest {
   controller: AbortController;
   mode: 'text' | 'image' | 'video';
   content: string;
+  user?: { content: string; quote?: string; images?: ImageAttachment[] };
 }
 
 const createId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -256,7 +259,7 @@ const ChatApp = () => {
     const welcomeMessage: ChatMessage = {
       id: `${id}-welcome`,
       role: 'assistant',
-      content: '你好，我是 AI 助手。直接提问即可，我会先联网检索最新资料，再结合资料给出回答。',
+      content: '你好，我是 AI 助手。可以直接提问或上传图片。开启联网后，我会根据问题判断是否需要搜索资料。',
       createdAt: now
     };
 
@@ -389,16 +392,15 @@ const ChatApp = () => {
     const userText = inputValue.trim() || (mode === 'text' ? '请解读图片并说明其中的关键信息。' : mode === 'image' ? '请根据参考图生成一张细节清晰的图片。' : '请以参考图为主体生成自然流畅的视频。');
     const submittedImages = [...images];
     const quote = mode === 'text' ? quotedText : '';
-    const requestText = quote ? `引用内容：\n${quote}\n\n${userText}` : userText;
     const now = new Date().toISOString();
     const requestId = createId();
     const assistantId = `assistant-${requestId}`;
-    const historyPayload = usingContext || guiding ? currentSession.messages
-      .filter(item => !item.id.endsWith('-welcome') && !item.media)
-      .filter(item => item.content.trim() || item.images?.length)
-      .map(item => ({ role: item.role, content: chatContent(item.id === previous?.messageId ? previous.content : item.quote ? `引用内容：\n${item.quote}\n\n${item.content}` : item.content, item.images) })) : undefined;
+    const { targetUser, ...requestPayload } = conversationRequest({
+      message: userText, messages: currentSession.messages, usingContext, quote, images: submittedImages,
+      guidance: guiding && previous ? { messageId: previous.messageId, content: previous.content, user: previous.user } : undefined,
+    });
     appendMessages(chatId, [
-      { id: `user-${requestId}`, role: 'user', content: userText, createdAt: now, guidance: guiding, quote, images: submittedImages },
+      { id: `user-${requestId}`, role: 'user', content: userText, createdAt: now, guidance: guiding, quote, references: requestPayload.references, images: submittedImages },
       { id: assistantId, role: 'assistant', content: '', createdAt: now, loading: true,
         process: [{ stage: 'request_start', message: guiding ? '已收到补充要求，正在重新组织回复…' : '正在连接 AI 服务…' }] }
     ]);
@@ -409,7 +411,7 @@ const ChatApp = () => {
     followOutputRef.current = true;
     setIsStreaming(true);
     const controller = new AbortController();
-    const active: ActiveRequest = { chatId, messageId: assistantId, controller, mode, content: '' };
+    const active: ActiveRequest = { chatId, messageId: assistantId, controller, mode, content: '', user: targetUser };
     activeRequestRef.current = active;
     // 旧请求的迟到片段和 finally 只能影响它自己的消息。
     const isCurrent = () => activeRequestRef.current === active && !controller.signal.aborted;
@@ -432,8 +434,7 @@ const ChatApp = () => {
         return;
       }
       await chatCompletionStream({
-        message: guiding ? `补充要求：${requestText}。请结合前面的对话和已有回复，按这个要求继续回答。` : requestText,
-        usingContext: usingContext || guiding, search: searchEnabled && !!inputValue.trim(), history: historyPayload, model: selectedModel, images: submittedImages
+        ...requestPayload, search: searchEnabled, model: selectedModel, images: submittedImages
       }, chunk => {
         if (!isCurrent()) return;
         if (!active.content) recordStage('streaming', '正在流式输出…');
@@ -732,7 +733,7 @@ const ChatApp = () => {
                       ])}
                     />}
                     {mode === 'text' && <>
-                    <Tooltip title="开启后，回答前会先联网检索最新资料">
+                    <Tooltip title="允许 AI 根据本轮问题和对话判断是否需要联网搜索">
                       <Space size={4} align="center">
                         <GlobalOutlined className="text-gray-500" />
                         <span className="text-xs text-gray-600">联网搜索</span>

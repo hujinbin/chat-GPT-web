@@ -12,6 +12,13 @@ export interface ProcessStep {
   metadata?: Record<string, unknown>;
 }
 
+function stepQueries(step: ProcessStep): string[] {
+  const values = Array.isArray(step.metadata?.queries) ? step.metadata.queries : [];
+  const queries = values.filter((value): value is string => typeof value === 'string' && !!value.trim());
+  if (queries.length) return Array.from(new Set(queries));
+  return typeof step.metadata?.query === 'string' && step.metadata.query.trim() ? [step.metadata.query] : [];
+}
+
 function CodeBlock({ children }: { children?: React.ReactNode }) {
   const [copyState, setCopyState] = useState('复制代码');
   const code = React.isValidElement<{ children?: React.ReactNode }>(children)
@@ -65,10 +72,11 @@ export function ChatProgress({ steps = [], sources = [], loading, stopped, start
   }, [loading, startedAt]);
   if (!steps.length && !sources.length) return null;
   const latest = steps[steps.length - 1];
-  const queries = new Set(steps.map(step => step.metadata?.query).filter(query => typeof query === 'string'));
+  const queries = new Set(steps.flatMap(stepQueries));
+  const decision = [...steps].reverse().find(step => ['search_skipped', 'search_plan_failed'].includes(step.stage));
   const summary = stopped ? '已停止生成' : loading ? latest?.message || '正在处理…'
     : latest?.stage === 'error' ? '处理失败，查看记录'
-    : sources.length ? `${queries.size ? `检索 ${queries.size} 个关键词 · ` : ''}已参考 ${sources.length} 篇资料` : latest?.message || '处理记录';
+    : sources.length ? `${queries.size ? `检索 ${queries.size} 个关键词 · ` : ''}已参考 ${sources.length} 篇资料` : decision?.message || latest?.message || '处理记录';
   return (
     <details className={styles.processPanel} data-testid="chat-progress">
       <summary><span className={loading ? styles.liveIndicator : styles.doneIndicator} /><span aria-live="polite">{summary}</span>{loading && <span className={styles.processElapsed}>已用 {elapsed} 秒</span>}<span className={styles.processHint}>查看过程与来源</span></summary>
@@ -76,7 +84,7 @@ export function ChatProgress({ steps = [], sources = [], loading, stopped, start
         {steps.map((step, index) => (
           <li key={`${step.stage}-${index}`}>
             <span>{step.message}</span>
-            {typeof step.metadata?.query === 'string' && <small>检索词 · {step.metadata.query}</small>}
+            {stepQueries(step).length > 0 && <small>检索词 · {stepQueries(step).join(' / ')}</small>}
             {typeof step.metadata?.source_count === 'number' && <small>获取 {step.metadata.source_count} 条来源</small>}
             {typeof step.metadata?.read_count === 'number' && <small>已读取 {step.metadata.read_count} 篇正文</small>}
             {typeof step.metadata?.elapsed_ms === 'number' && <small>耗时 {(step.metadata.elapsed_ms / 1000).toFixed(1)} 秒</small>}

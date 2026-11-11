@@ -6,6 +6,16 @@ const vm = require('node:vm');
 const ts = require('typescript');
 
 function loadAPI(fetch) {
+    const localModules = new Map();
+    const loadLocal = name => {
+        if (localModules.has(name)) return localModules.get(name);
+        assert.ok(['./attachments', './conversation'].includes(name));
+        const localExports = {};
+        localModules.set(name, localExports);
+        const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, `${name}.ts`), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+        vm.runInNewContext(code, { exports: localExports, require: loadLocal });
+        return localExports;
+    };
     const source = fs.readFileSync(path.join(__dirname, 'index.ts'), 'utf8');
     const compiled = ts.transpileModule(source, {
         compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true }
@@ -14,12 +24,7 @@ function loadAPI(fetch) {
     vm.runInNewContext(compiled, {
         exports, fetch, TextDecoder, DOMException,
         require: name => {
-            if (name === './attachments') {
-                const attachmentExports = {};
-                const attachmentCode = ts.transpileModule(fs.readFileSync(path.join(__dirname, 'attachments.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
-                vm.runInNewContext(attachmentCode, { exports: attachmentExports });
-                return attachmentExports;
-            }
+            if (name.startsWith('./')) return loadLocal(name);
             assert.equal(name, '../utils/request');
             return { __esModule: true, API_BASE_URL: '/api', default: () => {} };
         }
@@ -172,4 +177,34 @@ test('图片问答与多轮历史保留 content 数组，旧文本格式仍兼�
     assert.deepEqual(request.messages[0], history[0]);
     assert.deepEqual(request.messages[1].content, [{ type: 'text', text: '解释图片' }, { type: 'image_url', image_url: { url: image.url } }]);
     assert.equal(request.search, false);
+});
+
+test('智能联网阶段原样传递规划、跳过原因、失败和多个检索词', async () => {
+    const fixture = streamResponse([
+        'event: stage\ndata: {"stage":"search_planning","message":"正在理解本轮问题"}\n\n',
+        'event: stage\ndata: {"stage":"search_start","message":"正在搜索资料","queries":["MacBook M4 价格","MacBook M4 配置"],"query":"MacBook M4 价格"}\n\n',
+        'event: stage\ndata: {"stage":"search_skipped","message":"本轮是改写要求，直接回答"}\n\n',
+        'event: stage\ndata: {"stage":"search_plan_failed","message":"暂时无法判断检索需求，继续回答"}\n\n',
+        'event: done\ndata: {}\n\n',
+    ]);
+    const cb = callbacks();
+    await loadAPI(async () => fixture.response).chatCompletionStream({ message: '这台电脑呢' }, ...cb.args, cb.options);
+    assert.deepEqual(cb.events.stage.map(event => event[0]), ['search_planning', 'search_start', 'search_skipped', 'search_plan_failed']);
+    assert.deepEqual(Array.from(cb.events.stage[1][2].queries), ['MacBook M4 价格', 'MacBook M4 配置']);
+    assert.equal(cb.events.stage[2][1], '本轮是改写要求，直接回答');
+    assert.equal(cb.events.errors.length, 0);
+    assert.equal(cb.events.done, 1);
+});
+
+test('上下文关闭只发送显式本轮引用与原始提问，并保留智能联网授权', async () => {
+    const fixture = streamResponse(['event: done\ndata: {}\n\n']);
+    let request;
+    const api = loadAPI(async (_url, init) => { request = JSON.parse(init.body); return fixture.response; });
+    const cb = callbacks();
+    await api.chatCompletionStream({ message: '现在多少钱', usingContext: false, search: true,
+        history: [{ role: 'user', content: '旧的金融问题' }],
+        references: [{ role: 'user', content: '用户引用的内容：MacBook M4' }],
+    }, ...cb.args);
+    assert.deepEqual(request.messages, [{ role: 'user', content: '用户引用的内容：MacBook M4' }, { role: 'user', content: '现在多少钱' }]);
+    assert.equal(request.search, true);
 });

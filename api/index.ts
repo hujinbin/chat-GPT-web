@@ -1,4 +1,5 @@
-import { chatContent, ChatHistoryMessage, ImageAttachment } from './attachments';
+import { ChatHistoryMessage, ImageAttachment } from './attachments';
+import { streamMessages } from './conversation';
 import { API_BASE_URL } from '../utils/request';
 import request from '../utils/request';
 
@@ -109,6 +110,7 @@ export const chatCompletionStream = async (
         usingContext?: boolean;
         search?: boolean;
         history?: ChatHistoryMessage[];
+        references?: ChatHistoryMessage[];
         images?: ImageAttachment[];
         model?: string;
     },
@@ -121,8 +123,7 @@ export const chatCompletionStream = async (
         onStage?: (stage: string, message: string, metadata?: Record<string, unknown>) => void;
     }
 ) => {
-    const messages = param.usingContext ? [...(param.history || [])] : [];
-    messages.push({ role: 'user', content: chatContent(param.message, param.images) });
+    const messages = streamMessages(param);
 
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let completed = false;
