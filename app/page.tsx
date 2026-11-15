@@ -404,8 +404,10 @@ const ChatApp = () => {
       { id: assistantId, role: 'assistant', content: '', createdAt: now, loading: true,
         process: [{ stage: 'request_start', message: guiding ? '已收到补充要求，正在重新组织回复…' : '正在连接 AI 服务…' }] }
     ]);
-    setInputValue('');
-    clearImages();
+    if (mode !== 'video') {
+      setInputValue('');
+      clearImages();
+    }
     setQuotedText('');
     setSelectionQuote('');
     followOutputRef.current = true;
@@ -428,7 +430,13 @@ const ChatApp = () => {
       if (mode !== 'text') {
         recordStage('media_start', mode === 'image' ? '正在生成图片…' : '正在创建视频任务…');
         const media = await generateMedia(API_BASE_URL, mode, userText, mediaModel, controller.signal,
-          videoId => { if (isCurrent()) updateMessage(chatId, assistantId, item => ({ ...item, videoId })); },
+          videoId => {
+            if (!isCurrent()) return;
+            setInputValue(current => current === inputValue ? '' : current);
+            const submittedImageIds = new Set(submittedImages.map(image => image.id));
+            setImages(current => current.filter(image => !submittedImageIds.has(image.id)));
+            updateMessage(chatId, assistantId, item => ({ ...item, videoId }));
+          },
           text => recordStage('media_progress', text), undefined, { images: submittedImages, size: imageSize, ratio: mode === 'image' ? imageRatio : videoRatio, seconds: String(videoSeconds), videoMode: submittedImages.length ? videoMode : 'text' });
         if (isCurrent()) updateMessage(chatId, assistantId, item => ({ ...item, media, loading: false, stage: undefined, content: mode === 'image' ? '图片已生成' : '视频已生成', process: [...(item.process || []), { stage: 'done', message: '生成完成' }] }));
         return;
