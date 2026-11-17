@@ -1,38 +1,127 @@
-# chat-GPT-web
+# AI 聊天助手 · chat-GPT-web
 
-This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+基于 Next.js、React 和 Ant Design 的 AI 聊天网站，支持流式文本对话、结合上下文的联网问答、图片理解、图片生成与视频生成。前端通过统一 AI 后端调用模型，默认使用 Agnes Flash 系列，后端使用golang gin框架。
 
-## Getting Started
+## 功能介绍
 
-First, run the development server:
+### 文本对话与上下文
+
+- **流式回答**：通过 SSE 逐段展示回复，支持停止生成；连接异常时保留已接收的内容，并显示错误提示。
+- **模型选择**：从后端读取文本模型分组，优先采用首组返回的默认模型，兜底为 `agnes-3.0-flash`。
+- **上下文记忆**：默认开启，按完整成功对话轮次携带最多 20 条历史消息。欢迎语、失败、停止、未完成的回答及媒体生成结果不会作为普通历史轮次带入。
+- **引用追问**：选中聊天内容后点击“引用选中内容”，将引用与本轮问题一起提交。关闭上下文记忆后，主动引用仍然生效。
+- **生成中补充要求**：回答尚未完成时可继续输入，点击“补充要求”或按 `Ctrl / ⌘ + Enter` 调整回答。系统会停止原请求，结合原问题、原图片及已生成片段重新组织回复。
+- **Markdown 展示**：支持标题、列表、表格、代码块复制和外链打开；长用户消息支持展开与收起。
+
+### 联网搜索与参考来源
+
+- 联网搜索默认开启，可独立切换。开启表示允许后端按需判断是否搜索，并非每次提问都强制检索。
+- 文本请求将历史上下文、明确引用和本轮图文组织为同一组 `messages`，供后端结合上下文理解本次问题。
+- 搜索规划、检索和网页正文读取由后端执行，前端负责展示后端返回的结果与处理阶段。
+- “查看过程与来源”面板支持展示检索词、来源数量、已读正文数量、阶段耗时、跳过搜索原因及可点击的参考资料；具体信息取决于后端发送的 SSE 字段。
+
+### 图片输入与图片问答
+
+- 支持选择文件、粘贴剪贴板图片、拖入图片和添加公开可访问的 HTTPS 图片链接。
+- 附件可预览和移除，发送后以图文内容块提交给文本模型，支持继续围绕图片追问。
+- 提供“解读图片”快捷操作；只发送图片时会自动补充默认解读提示。图片理解、文字提取等效果取决于所选模型。
+- 本地文件支持 PNG、JPEG、WebP；每张大于 0 且不超过 5MB，每次最多 5 张，本地图片合计不超过 20MB。图片链接需能被后端模型服务访问，远程文件大小不会在前端下载校验。
+
+### 图片生成
+
+- 支持文生图，以及使用当前附加的参考图片进行图生图、多图参考生成。
+- 可选 Flash 模型：`agnes-image-2.5-flash`、`agnes-image-2.1-flash`、`agnes-image-2.0-flash`。
+- 可选分辨率：1K、2K、3K、4K。
+- 可选比例：1:1、3:4、4:3、16:9、9:16、2:3、3:2、21:9。
+- 生成结果在会话内展示，兼容后端返回的图片 URL 或 Base64 数据，支持打开查看。
+
+### 视频生成
+
+- 使用 `agnes-video-2.5-flash`，输出规格为 720P。
+- 支持文生视频、最多 5 张参考图生视频，以及首尾帧生视频。首尾帧模式最多 2 张图片，第一张作为首帧，第二张作为尾帧。
+- 可选时长为 4～12 秒，默认 5 秒；默认比例为 16:9，支持 21:9、16:9、4:3、1:1、3:4、9:16。
+- 本地参考图会先上传到后端，取得公开 HTTPS 地址后提交任务。
+- 创建任务后每 2 秒查询一次状态，展示进度并在完成后播放视频；单次查询最长 10 分钟。
+- 已取得任务 ID 时，即使停止查询或查询超时，也可通过“继续查询视频”继续读取该任务，无需重复创建。
+- 视频队列已满时，支持按等待时间自动退避重试，最多重试 2 次。
+
+### 会话管理与页面交互
+
+- 新建、切换、重命名、收藏、删除会话，以及确认后清空全部会话。
+- 按会话标题和最后一条消息搜索，侧栏摘要最多显示两行，避免长文本撑开布局。
+- 将当前会话的文字与显式引用导出为 TXT 文件。
+- 支持侧栏折叠、移动端布局与流式输出跟随滚动；向上阅读历史时暂停自动跟随。
+
+## 使用方式
+
+1. 新建或选择一个会话，切换“文本对话”“生成图片”或“生成视频”。
+2. 选择模型；图片和视频模式还可设置比例、分辨率或时长等参数。
+3. 输入文字，按需添加图片。文本模式可调整联网搜索与上下文记忆开关。
+4. 点击发送，在会话中查看回答、媒体结果与处理过程。
+5. 文本生成期间可以补充要求或停止生成；视频任务可以停止查询后再继续查询。
+
+快捷键：`Enter` 发送，`Shift + Enter` 换行；文本生成期间使用 `Ctrl / ⌘ + Enter` 提交补充要求。
+
+
+## 技术栈
+| 技术 | 用途 |
+| --- | --- |
+| Next.js 14.1.4、React 18、TypeScript | 页面、组件与类型约束 |
+| Ant Design 5、Less、Tailwind CSS | 界面与响应式样式 |
+| 原生 Fetch、ReadableStream、AbortController | 流式回复、媒体任务与取消 |
+| Axios | 通用接口请求 |
+| react-markdown、remark-gfm | Markdown 与 GFM 内容展示 |
+
+## 本地开发
+
+环境要求：Node.js 18.17.0 或以上版本、npm，以及可访问的 AI 后端。
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+默认访问 [http://localhost:3000](http://localhost:3000)。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+默认 API 基址为 `/api`。开发模式下，`next.config.mjs` 将 `/api/*` 转发到 `http://127.0.0.1:8080/api/*`，因此需要先启动对应后端。
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+如果需要直接调用其他后端，可在项目根目录创建 `.env.local`，填写包含 `/api` 的 API 根地址：
 
-## Learn More
+```dotenv
+NEXT_PUBLIC_API_BASE=https://monitor.leheavengame.com/api
+```
 
-To learn more about Next.js, take a look at the following resources:
+## 后端接口约定
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+下表路径均相对于 API 基址，例如默认的 `/api`。
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js/) - your feedback and contributions are welcome!
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/ai/models` | 获取文本模型分组及默认模型 |
+| POST | `/ai/chat/stream` | SSE 流式对话，提交 `messages`、`model`、`search` |
+| POST | `/ai/images/generations` | 图片生成，提交描述、模型、参考图及尺寸比例 |
+| POST | `/ai/images/upload` | 上传本地视频参考图，返回公开 HTTPS 图片地址 |
+| POST | `/ai/videos` | 创建视频任务并取得 `video_id` |
+| GET | `/ai/videos?video_id=...` | 查询视频状态、进度和结果地址 |
 
-## Deploy on Vercel
+文本流支持 `stage`、`search`、`message`、`error`、`done` 等事件。媒体接口使用 `code`、`data`、`msg` 业务包装，成功码为 `200`。字段解析分别见 [api/index.ts](./api/index.ts) 与 [api/media.ts](./api/media.ts)。
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 构建与部署
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
+```bash
+npm run build
+```
+
+生产构建使用静态导出，产物位于 `out/`，可交由 Nginx 等静态服务器托管。开发和生产缓存分别使用 `.next-dev/` 与 `.next/`，避免构建覆盖正在运行的开发缓存。
+
+生产静态站点本身不提供 AI API。使用默认 `/api` 时，部署服务器需将该路径反向代理到 AI 后端；流式接口需支持长连接并关闭响应缓冲。若使用独立 API 域名，应在构建前设置 `NEXT_PUBLIC_API_BASE`，并配置对应跨域规则。开发环境的 `rewrites` 不会随静态文件自动提供代理。
+
+## 检查与测试
+
+```bash
+npm run lint
+npx tsc --noEmit
+node --test api/conversation.test.cjs api/stream.test.cjs api/media.test.cjs
+```
+
+现有测试通过模拟请求覆盖上下文与引用组织、SSE 解析和终止处理、媒体任务提交与查询等逻辑，不会调用真实模型。
